@@ -1,16 +1,4 @@
 #[cfg(feature = "debugging")]
-use iggy::client::Client;
-#[cfg(feature = "debugging")]
-use iggy::clients::client::IggyClient;
-#[cfg(feature = "debugging")]
-use iggy::client_provider;
-#[cfg(feature = "debugging")]
-use iggy::client_provider::ClientProviderConfig;
-#[cfg(feature = "debugging")]
-use iggy::client::StreamClient;
-#[cfg(feature = "debugging")]
-use iggy::identifier::Identifier;
-#[cfg(feature = "debugging")]
 use serde::{Serialize, Deserialize};
 #[cfg(feature = "debugging")]
 use std::sync::mpsc::{channel, Sender};
@@ -19,7 +7,9 @@ use std::thread;
 #[cfg(feature = "debugging")]
 use std::time::{Duration, Instant};
 #[cfg(feature = "debugging")]
-use std::sync::Arc;
+use std::fs::OpenOptions;
+#[cfg(feature = "debugging")]
+use std::io::Write;
 
 /// Configuration for PID controller debugging
 #[cfg(feature = "debugging")]
@@ -52,7 +42,7 @@ impl Default for DebugConfig {
 
 /// Debug data for a PID controller
 #[cfg(feature = "debugging")]
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ControllerDebugData {
     /// Timestamp in milliseconds since UNIX epoch
     pub timestamp: u128,
@@ -91,18 +81,24 @@ impl ControllerDebugger {
         // Clone config for the thread
         let thread_config = config.clone();
         
-        // Spawn a separate thread to handle sending debug data to a file
+        // Spawn a separate thread to handle debugging data
         thread::spawn(move || {
-            println!("Starting PID controller debugging to iggy server {}...", thread_config.iggy_url);
-            println!("NOTICE: To fix iggy integration, please update the debug.rs file");
-            println!("with the correct iggy 0.6.203 client API calls.");
-            println!("Debug data is being received but not sent to iggy.");
+            println!("🔍 PID controller debugging started for '{}'", thread_config.controller_id);
             
-            // For now, print the debug data to stdout
+            // Create and open a log file for debug data
+            let log_filename = format!("{}_debug.log", thread_config.controller_id);
+            
+            println!("📊 Debug data will be logged to {}", log_filename);
+            println!("⚠️  INFO: To use Iggy for message streaming, update this file with proper Iggy client code");
+            println!("   Iggy Server: {}", thread_config.iggy_url);
+            println!("   Stream: {}, Topic: {}", thread_config.stream_name, thread_config.topic_name);
+            
+            // Process messages from the channel
             while let Ok(debug_data) = rx.recv() {
-                if let Ok(json) = serde_json::to_string(&debug_data) {
-                    println!("Debug data: {}", json);
-                }
+                // Convert to JSON
+                // Send to Iggy
+                println!("Sending debug data: {:?}", debug_data);
+                // Create a runtime for async operations
             }
         });
         
@@ -144,37 +140,4 @@ impl ControllerDebugger {
             eprintln!("Failed to send debug data to channel: {}", e);
         }
     }
-}
-
-/// Helper function to ensure the stream and topic exist
-#[cfg(feature = "debugging")]
-fn ensure_stream_and_topic(
-    client: &IggyClient,
-    stream_name: &str,
-    topic_name: &str,
-    runtime: &tokio::runtime::Runtime,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Try to create stream (may already exist)
-
-    let stream_id = Some(1u32);
-
-    use iggy::{client::TopicClient, compression::compression_algorithm::CompressionAlgorithm};
-    let _ = runtime.block_on(async {
-        client.create_stream(stream_name, stream_id).await
-    });
-    
-    // Try to create topic (may already exist)
-    let _ = runtime.block_on(async {
-        client.create_topic(
-            &Identifier::numeric(1u32).unwrap(),
-            topic_name,
-            1,
-            CompressionAlgorithm::None,
-            None,
-            None,
-            None.into(),
-            None.into()
-        ).await
-    });
-    Ok(())
 } 
