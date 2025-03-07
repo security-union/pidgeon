@@ -1,12 +1,32 @@
 use leptos::*;
 use leptos_meta::*;
 use leptos_router::*;
+use serde::{Serialize, Deserialize};
+use std::rc::Rc;
+use std::collections::HashSet;
+
+// Define the PID controller data structure to match what's sent by the backend
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PidControllerData {
+    pub timestamp: u128,
+    pub controller_id: String,
+    pub error: f64,
+    pub output: f64,
+    pub p_term: f64,
+    pub i_term: f64,
+    pub d_term: f64,
+}
 
 #[component]
 pub fn App() -> impl IntoView {
     // Provides context that manages stylesheets, titles, meta tags, etc.
     provide_meta_context();
-
+    
+    // Create signal to store controller data
+    let (pid_data, set_pid_data) = create_signal(Vec::<PidControllerData>::new());
+    
+    // Initialize WebSocket connection in main.rs
+    
     view! {
         // injects a stylesheet into the document <head>
         // id=leptos means cargo-leptos will hot-reload this stylesheet
@@ -19,7 +39,7 @@ pub fn App() -> impl IntoView {
         <Router>
             <main>
                 <Routes>
-                    <Route path="/" view=HomePage/>
+                    <Route path="/" view=move || view! { <HomePage pid_data=pid_data /> }/>
                     <Route path="/*any" view=NotFound/>
                 </Routes>
             </main>
@@ -29,95 +49,99 @@ pub fn App() -> impl IntoView {
 
 /// Renders the home page of the application with PID controller monitoring dashboard
 #[component]
-fn HomePage() -> impl IntoView {
-    // Create signals for temperature data
-    let (current_temp, set_current_temp) = create_signal(25.0);
-    let (target_temp, set_target_temp) = create_signal(30.0);
-    let (p_value, set_p_value) = create_signal(0.5);
-    let (i_value, set_i_value) = create_signal(0.1);
-    let (d_value, set_d_value) = create_signal(0.05);
+fn HomePage(pid_data: ReadSignal<Vec<PidControllerData>>) -> impl IntoView {
+    let (selected_controller, set_selected_controller) = create_signal::<Option<String>>(None);
     
-    // Function to simulate fetching data (to be replaced with real WebSocket connection)
-    let fetch_temperature_data = move || {
-        // In a real app, this would connect to the PID controller via WebSocket
-        // For now, we'll just use random data for demonstration
-        set_current_temp.update(|val| *val += (js_sys::Math::random() - 0.5) * 2.0);
-    };
+    // Create a derived signal that filters data for the selected controller
+    let filtered_data = create_memo(move |_| {
+        let data = pid_data.get();
+        let selected = selected_controller.get();
+        
+        match selected {
+            Some(controller_id) => data.iter()
+                .filter(|d| d.controller_id == controller_id)
+                .cloned()
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        }
+    });
     
-    // Set up an interval to periodically update data
-    set_interval(fetch_temperature_data, std::time::Duration::from_millis(1000));
+    // Create a signal to hold all unique controller IDs
+    let controller_ids = create_memo(move |_| {
+        let data = pid_data.get();
+        let mut ids = HashSet::new();
+        for d in data.iter() {
+            ids.insert(d.controller_id.clone());
+        }
+        ids.into_iter().collect::<Vec<_>>()
+    });
 
     view! {
         <div class="container">
             <h1>"Pidgeoneer PID Controller Dashboard"</h1>
             
-            <div class="dashboard-grid">
-                <div class="temperature-display panel">
-                    <h2>"Temperature Monitor"</h2>
-                    <div class="temp-readings">
-                        <div class="temp-item">
-                            <span class="label">"Current Temperature: "</span>
-                            <span class="value">{move || format!("{:.2}°C", current_temp.get())}</span>
-                        </div>
-                        <div class="temp-item">
-                            <span class="label">"Target Temperature: "</span>
-                            <span class="value">{move || format!("{:.2}°C", target_temp.get())}</span>
-                        </div>
-                    </div>
+            <div class="controller-selector">
+                <h2>"Select Controller"</h2>
+                <div class="controller-list">
+                    {move || {
+                        let ids = controller_ids.get();
+                        if ids.is_empty() {
+                            view! { <div class="no-data">"No controllers detected. Waiting for data..."</div> }.into_view()
+                        } else {
+                            ids.into_iter().map(|id| {
+                                let id_clone = id.clone();
+                                let is_selected = move || selected_controller.get() == Some(id.clone());
+                                view! { 
+                                    <button 
+                                        class="controller-button" 
+                                        class:active=is_selected
+                                        on:click=move |_| set_selected_controller.set(Some(id_clone.clone()))
+                                    >
+                                        {id.clone()}
+                                    </button> 
+                                }
+                            }).collect_view()
+                        }
+                    }}
                 </div>
-                
-                <div class="pid-controls panel">
-                    <h2>"PID Controller Settings"</h2>
-                    <div class="control-group">
-                        <label for="p-value">"P Value:"</label>
-                        <input 
-                            type="range" 
-                            id="p-value" 
-                            min="0" 
-                            max="2" 
-                            step="0.1"
-                            prop:value={move || p_value.get().to_string()}
-                            on:input=move |ev| {
-                                let val = event_target_value(&ev).parse::<f64>().unwrap_or(0.5);
-                                set_p_value.update(|p| *p = val);
-                            }
-                        />
-                        <span class="value">{move || format!("{:.2}", p_value.get())}</span>
-                    </div>
-                    
-                    <div class="control-group">
-                        <label for="i-value">"I Value:"</label>
-                        <input 
-                            type="range" 
-                            id="i-value" 
-                            min="0" 
-                            max="1" 
-                            step="0.05"
-                            prop:value={move || i_value.get().to_string()}
-                            on:input=move |ev| {
-                                let val = event_target_value(&ev).parse::<f64>().unwrap_or(0.1);
-                                set_i_value.update(|i| *i = val);
-                            }
-                        />
-                        <span class="value">{move || format!("{:.2}", i_value.get())}</span>
-                    </div>
-                    
-                    <div class="control-group">
-                        <label for="d-value">"D Value:"</label>
-                        <input 
-                            type="range" 
-                            id="d-value" 
-                            min="0" 
-                            max="0.5" 
-                            step="0.01"
-                            prop:value={move || d_value.get().to_string()}
-                            on:input=move |ev| {
-                                let val = event_target_value(&ev).parse::<f64>().unwrap_or(0.05);
-                                set_d_value.update(|d| *d = val);
-                            }
-                        />
-                        <span class="value">{move || format!("{:.2}", d_value.get())}</span>
-                    </div>
+            </div>
+            
+            <div class="dashboard-grid">
+                <div class="panel">
+                    <h2>"Controller Data"</h2>
+                    {move || {
+                        let data = filtered_data.get();
+                        if data.is_empty() {
+                            view! { <div class="no-data">"Select a controller to view data"</div> }.into_view()
+                        } else if let Some(latest) = data.last() {
+                            view! {
+                                <div class="data-grid">
+                                    <div class="data-item">
+                                        <span class="label">"Error:"</span>
+                                        <span class="value">{format!("{:.4}", latest.error)}</span>
+                                    </div>
+                                    <div class="data-item">
+                                        <span class="label">"Output:"</span>
+                                        <span class="value">{format!("{:.4}", latest.output)}</span>
+                                    </div>
+                                    <div class="data-item">
+                                        <span class="label">"P Term:"</span>
+                                        <span class="value">{format!("{:.4}", latest.p_term)}</span>
+                                    </div>
+                                    <div class="data-item">
+                                        <span class="label">"I Term:"</span>
+                                        <span class="value">{format!("{:.4}", latest.i_term)}</span>
+                                    </div>
+                                    <div class="data-item">
+                                        <span class="label">"D Term:"</span>
+                                        <span class="value">{format!("{:.4}", latest.d_term)}</span>
+                                    </div>
+                                </div>
+                            }.into_view()
+                        } else {
+                            view! { <div class="no-data">"No data available"</div> }.into_view()
+                        }
+                    }}
                 </div>
             </div>
         </div>
@@ -128,17 +152,10 @@ fn HomePage() -> impl IntoView {
 #[component]
 fn NotFound() -> impl IntoView {
     // set an HTTP status code 404
-    // this is feature gated because it can only be done during
-    // initial server-side rendering
-    // if you navigate to the 404 page subsequently, the status
-    // code will not be set because there is not a new HTTP request
-    // to the server
     #[cfg(feature = "ssr")]
     {
-        // this can be done inline because it's synchronous
-        // if it were async, we'd use a server function
-        let resp = expect_context::<leptos_actix::ResponseOptions>();
-        resp.set_status(actix_web::http::StatusCode::NOT_FOUND);
+        let response = expect_context::<leptos_actix::ResponseOptions>();
+        response.set_status(leptos_actix::actix_web::http::StatusCode::NOT_FOUND);
     }
 
     view! {

@@ -14,7 +14,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Core dependencies
-iggy = "0.12.4"
+iggy = "0.6.203"
 tokio = { version = "1.35.0", features = ["full"] }
 serde = { version = "1.0.193", features = ["derive"] }
 serde_json = "1.0.108"

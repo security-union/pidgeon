@@ -7,16 +7,39 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# Pidgeon crate
+pidgeon = { path = "../pidgeon", features = ["debugging"] }
+
+# Server
 actix-files = { version = "0.6", optional = true }
 actix-web = { version = "4", optional = true, features = ["macros"] }
-console_error_panic_hook = "0.1"
 http = { version = "1.0.0", optional = true }
+
+# Serialization
+serde = { version = "1.0" }
+serde_json = { version = "1.0" }
+
+# Logging
+log = "0.4"
+console_log = "1.0"
+console_error_panic_hook = "0.1"
+
+# Leptos framework
 leptos = { version = "0.6" }
 leptos_meta = { version = "0.6" }
 leptos_actix = { version = "0.6", optional = true }
 leptos_router = { version = "0.6" }
+
+# WebAssembly
 wasm-bindgen = "=0.2.95"
 js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "HtmlCanvasElement", 
+    "CanvasRenderingContext2d",
+    "WebSocket",
+    "MessageEvent",
+    "BinaryType",
+]}
 
 [features]
 csr = ["leptos/csr", "leptos_meta/csr", "leptos_router/csr"]
