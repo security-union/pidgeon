@@ -1,35 +1,33 @@
-[package]
-name = "pidgeon"
+[workspace]
+members = [
+    "crates/pidgeon",
+    "crates/pidgeoneer",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "A robust, thread-safe PID controller library written in Rust"
 authors = ["Dario Alessandro"]
 repository = "https://github.com/darioalessandro/pidgeon"
 license = "MIT OR Apache-2.0"
-keywords = ["pid", "control", "controller", "robotics", "automation"]
-categories = ["science", "embedded", "algorithms", "robotics"]
-readme = "README.md"
 
-[dependencies]
-# No external dependencies - pure Rust implementation
+[workspace.dependencies]
+# Core dependencies
+iggy = "0.12.4"
+tokio = { version = "1.35.0", features = ["full"] }
+serde = { version = "1.0.193", features = ["derive"] }
+serde_json = "1.0.108"
+rand = "0.8.5"
 
-[dev-dependencies]
-# Dependencies only used in tests and examples
-criterion = "0.5"
-
-[[example]]
-name = "temperature_control"
-path = "examples/temperature_control.rs"
-
-[[example]]
-name = "multithreaded_control"  
-path = "examples/multithreaded_control.rs"
-
-[[bench]]
-name = "pid_benchmark"
-harness = false
-required-features = ["benchmarks"]
-
-[features]
-default = []
-benchmarks = []
+# Web UI dependencies
+leptos = { version = "0.5.4", features = ["csr"] }
+leptos_meta = { version = "0.5.4", features = ["csr"] }
+leptos_router = { version = "0.5.4", features = ["csr"] }
+plotters = "0.3.5"
+plotters-canvas = "0.3.0"
+wasm-bindgen = "0.2.89"
+web-sys = { version = "0.3.66", features = ["HtmlCanvasElement"] }
+console_log = "1.0.0"
+log = "0.4.20"
+console_error_panic_hook = "0.1.7" 
