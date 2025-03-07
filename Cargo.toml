@@ -1,0 +1,35 @@
+[package]
+name = "pidgeon"
+version = "0.1.0"
+edition = "2021"
+description = "A robust, thread-safe PID controller library written in Rust"
+authors = ["Dario Alessandro"]
+repository = "https://github.com/darioalessandro/pidgeon"
+license = "MIT OR Apache-2.0"
+keywords = ["pid", "control", "controller", "robotics", "automation"]
+categories = ["science", "embedded", "algorithms", "robotics"]
+readme = "README.md"
+
+[dependencies]
+# No external dependencies - pure Rust implementation
+
+[dev-dependencies]
+# Dependencies only used in tests and examples
+criterion = "0.5"
+
+[[example]]
+name = "temperature_control"
+path = "examples/temperature_control.rs"
+
+[[example]]
+name = "multithreaded_control"  
+path = "examples/multithreaded_control.rs"
+
+[[bench]]
+name = "pid_benchmark"
+harness = false
+required-features = ["benchmarks"]
+
+[features]
+default = []
+benchmarks = []

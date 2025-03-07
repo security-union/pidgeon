@@ -1,0 +1,34 @@
+[workspace]
+# Whether to allow release-plz to publish the crates to crates.io
+publish = true
+
+# Whether to update the changelog file
+changelog = true
+
+# Whether to commit the updated version in Cargo.toml
+git-release-enable = true
+
+[changelog]
+# The header template of the changelog
+header = """
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+
+# Configure the commit types that will be used to generate the changelog
+[changelog.commit-types]
+feat = { title = "Features", semver = "minor" }
+fix = { title = "Bug Fixes", semver = "patch" }
+docs = { title = "Documentation", semver = "patch" }
+style = { title = "Styling", semver = "patch" }
+refactor = { title = "Refactoring", semver = "patch" }
+perf = { title = "Performance", semver = "patch" }
+test = { title = "Testing", semver = "patch" }
+build = { title = "Build System", semver = "patch" }
+ci = { title = "CI", semver = "patch" }
+chore = { title = "Chore", semver = "patch" }
+revert = { title = "Revert", semver = "patch" } 
