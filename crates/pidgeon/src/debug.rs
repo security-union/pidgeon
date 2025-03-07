@@ -1,7 +1,10 @@
+use iggy::messages::send_messages::Message;
 #[cfg(feature = "debugging")]
 use serde::{Serialize, Deserialize};
+use std::sync::atomic::AtomicU64;
 #[cfg(feature = "debugging")]
 use std::sync::mpsc::{channel, Sender};
+use std::sync::Arc;
 #[cfg(feature = "debugging")]
 use std::thread;
 #[cfg(feature = "debugging")]
@@ -10,6 +13,8 @@ use std::time::{Duration, Instant};
 use std::fs::OpenOptions;
 #[cfg(feature = "debugging")]
 use std::io::Write;
+#[cfg(feature = "debugging")]
+
 
 /// Configuration for PID controller debugging
 #[cfg(feature = "debugging")]
@@ -42,7 +47,7 @@ impl Default for DebugConfig {
 
 /// Debug data for a PID controller
 #[cfg(feature = "debugging")]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct ControllerDebugData {
     /// Timestamp in milliseconds since UNIX epoch
     pub timestamp: u128,
@@ -89,16 +94,117 @@ impl ControllerDebugger {
             let log_filename = format!("{}_debug.log", thread_config.controller_id);
             
             println!("📊 Debug data will be logged to {}", log_filename);
-            println!("⚠️  INFO: To use Iggy for message streaming, update this file with proper Iggy client code");
-            println!("   Iggy Server: {}", thread_config.iggy_url);
+            println!("⚠️  Attempting to connect to Iggy server at {}", thread_config.iggy_url);
             println!("   Stream: {}, Topic: {}", thread_config.stream_name, thread_config.topic_name);
             
+            // Create a runtime for async operations
+            let runtime = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    eprintln!("Failed to create tokio runtime: {}", e);
+                    return;
+                }
+            };
+            
+            // Try to connect to Iggy client
+            let connection_string = format!("iggy://iggy:iggy@{}", thread_config.iggy_url);
+            let iggy_result = runtime.block_on(async {
+                // Try to connect and create producer
+                match iggy::clients::client::IggyClient::from_connection_string(&connection_string) {
+                    Ok(client) => {
+                        println!("✅ Connected to Iggy server");
+
+                        
+                        // Create a producer
+                        match client.producer(&thread_config.stream_name, &thread_config.topic_name) {
+                            Ok(producer_builder) => {
+                                // Build the producer with batch size of 1 to send immediately
+                                let mut producer = producer_builder.batch_size(1).build();
+                                
+                                // Initialize the producer
+                                match producer.init().await {
+                                    Ok(_) => {
+                                        println!("✅ Producer initialized for stream '{}', topic '{}'",
+                                                thread_config.stream_name, thread_config.topic_name);
+                                        Some(producer)
+                                    }
+                                    Err(e) => {
+                                        eprintln!("❌ Failed to initialize producer: {}", e);
+                                        None
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("❌ Failed to create producer: {}", e);
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Failed to connect to Iggy server: {}", e);
+                        None
+                    }
+                }
+            });
+            
             // Process messages from the channel
-            while let Ok(debug_data) = rx.recv() {
-                // Convert to JSON
-                // Send to Iggy
-                println!("Sending debug data: {:?}", debug_data);
-                // Create a runtime for async operations
+            match iggy_result {
+                Some(mut producer) => {
+                    println!("✅ Ready to send messages to Iggy");
+                    
+                    // Process debug data and send to Iggy
+                    while let Ok(debug_data) = rx.recv() {
+                        // Convert to JSON for display
+                        if let Ok(json) = serde_json::to_string(&debug_data) {
+                            println!("📤 Sending: {}", json);
+                            
+                            // Write to log file as backup
+                            if let Ok(mut file) = OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&log_filename) 
+                            {
+                                if let Err(e) = writeln!(file, "{}", json) {
+                                    eprintln!("Error writing to log file: {}", e);
+                                }
+                            }
+                            
+                            let result = runtime.block_on(async {
+                                let payload = serde_json::to_vec(&debug_data).unwrap();
+                                let message = Message::new(None, payload.into(), None);
+                                producer.send(vec![message]).await
+                            });
+                            
+                            if let Err(e) = result {
+                                eprintln!("❌ Failed to send message to Iggy: {}", e);
+                            }
+                        }
+                    }
+                }
+                None => {
+                    println!("⚠️ Falling back to file logging only");
+                    
+                    // If Iggy is not available, just log to file
+                    while let Ok(debug_data) = rx.recv() {
+                        // Convert to JSON
+                        if let Ok(json) = serde_json::to_string(&debug_data) {
+                            println!("📥 Logging: {}", json);
+                            
+                            // Write to log file
+                            if let Ok(mut file) = OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&log_filename) 
+                            {
+                                if let Err(e) = writeln!(file, "{}", json) {
+                                    eprintln!("Error writing to log file: {}", e);
+                                }
+                            } else {
+                                eprintln!("Error opening log file");
+                            }
+                        }
+                    }
+                }
             }
         });
         
