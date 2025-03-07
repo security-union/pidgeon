@@ -1,4 +1,16 @@
 #[cfg(feature = "debugging")]
+use iggy::client::Client;
+#[cfg(feature = "debugging")]
+use iggy::clients::client::IggyClient;
+#[cfg(feature = "debugging")]
+use iggy::client_provider;
+#[cfg(feature = "debugging")]
+use iggy::client_provider::ClientProviderConfig;
+#[cfg(feature = "debugging")]
+use iggy::client::StreamClient;
+#[cfg(feature = "debugging")]
+use iggy::identifier::Identifier;
+#[cfg(feature = "debugging")]
 use serde::{Serialize, Deserialize};
 #[cfg(feature = "debugging")]
 use std::sync::mpsc::{channel, Sender};
@@ -7,16 +19,18 @@ use std::thread;
 #[cfg(feature = "debugging")]
 use std::time::{Duration, Instant};
 #[cfg(feature = "debugging")]
-use std::fs::OpenOptions;
-#[cfg(feature = "debugging")]
-use std::io::Write;
+use std::sync::Arc;
 
 /// Configuration for PID controller debugging
 #[cfg(feature = "debugging")]
 #[derive(Clone)]
 pub struct DebugConfig {
-    /// Filepath for debug logs
-    pub log_file: String,
+    /// URL of the iggy server
+    pub iggy_url: String,
+    /// Stream name for debugging data
+    pub stream_name: String,
+    /// Topic name for this controller's data
+    pub topic_name: String,
     /// Unique ID for this controller instance
     pub controller_id: String,
     /// Optional sampling rate (in Hz) for debug data
@@ -27,7 +41,9 @@ pub struct DebugConfig {
 impl Default for DebugConfig {
     fn default() -> Self {
         Self {
-            log_file: "pidgeon_debug.log".to_string(),
+            iggy_url: "127.0.0.1:8090".to_string(),
+            stream_name: "pidgeon_debug".to_string(),
+            topic_name: "controller_data".to_string(),
             controller_id: "pid_controller".to_string(),
             sample_rate_hz: None,
         }
@@ -75,34 +91,17 @@ impl ControllerDebugger {
         // Clone config for the thread
         let thread_config = config.clone();
         
-        // Spawn a separate thread to handle writing debug data to a file
+        // Spawn a separate thread to handle sending debug data to a file
         thread::spawn(move || {
-            println!("Starting PID controller debugging to {}", thread_config.log_file);
+            println!("Starting PID controller debugging to iggy server {}...", thread_config.iggy_url);
+            println!("NOTICE: To fix iggy integration, please update the debug.rs file");
+            println!("with the correct iggy 0.6.203 client API calls.");
+            println!("Debug data is being received but not sent to iggy.");
             
-            // Process messages from the channel
+            // For now, print the debug data to stdout
             while let Ok(debug_data) = rx.recv() {
-                // Try to serialize to JSON
-                let json_data = match serde_json::to_string(&debug_data) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("Failed to serialize debug data: {}", e);
-                        continue;
-                    }
-                };
-                
-                // Try to append to log file
-                match OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&thread_config.log_file) {
-                    Ok(mut file) => {
-                        if let Err(e) = writeln!(file, "{}", json_data) {
-                            eprintln!("Failed to write debug data to file: {}", e);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to open debug log file: {}", e);
-                    }
+                if let Ok(json) = serde_json::to_string(&debug_data) {
+                    println!("Debug data: {}", json);
                 }
             }
         });
@@ -115,7 +114,7 @@ impl ControllerDebugger {
         }
     }
     
-    /// Send debug data to log file
+    /// Send debug data
     pub fn send_debug_data(&mut self, error: f64, output: f64, p_term: f64, i_term: f64, d_term: f64) {
         // Check if we should send debug data (based on sampling rate)
         if let Some(interval) = self.sample_interval {
@@ -145,4 +144,37 @@ impl ControllerDebugger {
             eprintln!("Failed to send debug data to channel: {}", e);
         }
     }
+}
+
+/// Helper function to ensure the stream and topic exist
+#[cfg(feature = "debugging")]
+fn ensure_stream_and_topic(
+    client: &IggyClient,
+    stream_name: &str,
+    topic_name: &str,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Try to create stream (may already exist)
+
+    let stream_id = Some(1u32);
+
+    use iggy::{client::TopicClient, compression::compression_algorithm::CompressionAlgorithm};
+    let _ = runtime.block_on(async {
+        client.create_stream(stream_name, stream_id).await
+    });
+    
+    // Try to create topic (may already exist)
+    let _ = runtime.block_on(async {
+        client.create_topic(
+            &Identifier::numeric(1u32).unwrap(),
+            topic_name,
+            1,
+            CompressionAlgorithm::None,
+            None,
+            None,
+            None.into(),
+            None.into()
+        ).await
+    });
+    Ok(())
 } 

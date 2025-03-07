@@ -32,7 +32,9 @@ fn main() {
     let controller = {
         // Create debug configuration
         let debug_config = DebugConfig {
-            log_file: "temperature_control.log".to_string(),
+            iggy_url: "127.0.0.1:8090".to_string(),
+            stream_name: "pidgeon_debug".to_string(),
+            topic_name: "controller_data".to_string(),
             controller_id: "temperature_controller".to_string(),
             sample_rate_hz: Some(10.0), // 10Hz sample rate
         };
