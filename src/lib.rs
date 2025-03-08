@@ -515,3 +515,6 @@ mod tests {
         assert!(stats.average_error > 0.0);
     }
 }
+
+pub mod app;
+pub mod iggy_client;
