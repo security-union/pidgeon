@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use pidgeon::{ControllerConfig, InternalPidController, ThreadSafePidController};
-use std::sync::{Arc, Mutex};
+use pidgeon::{ControllerConfig, PidController, ThreadSafePidController};
+use std::sync::Arc;
 use std::thread;
 
 fn benchmark_pid_controller(c: &mut Criterion) {
@@ -11,7 +11,7 @@ fn benchmark_pid_controller(c: &mut Criterion) {
         .with_kd(0.05)
         .with_output_limits(-100.0, 100.0);
 
-    let mut controller = InternalPidController::new(config.clone());
+    let mut controller = PidController::new(config.clone());
 
     // Benchmark single threaded performance
     c.bench_function("pid_compute", |b| {
@@ -25,7 +25,7 @@ fn benchmark_pid_controller(c: &mut Criterion) {
     });
 
     // Benchmark thread-safe controller
-    let thread_safe_controller = Arc::new(ThreadSafePidController::new(config));
+    let thread_safe_controller = Arc::new(ThreadSafePidController::new(config.clone()));
 
     c.bench_function("thread_safe_pid_compute", |b| {
         b.iter(|| {
