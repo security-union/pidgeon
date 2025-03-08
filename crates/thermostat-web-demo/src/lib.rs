@@ -1,4 +1,3 @@
-pub mod components;
 pub mod app;
 
 #[cfg(feature = "hydrate")]
