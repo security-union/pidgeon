@@ -3819,21 +3819,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
-name = "thermostat-web-demo"
-version = "0.1.0"
-dependencies = [
- "axum",
- "console_error_panic_hook",
- "leptos",
- "leptos_axum",
- "leptos_meta",
- "leptos_router",
- "pidgeon",
- "tokio",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"

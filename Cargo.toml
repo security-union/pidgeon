@@ -2,7 +2,6 @@
 members = [
     "crates/pidgeon",
     "crates/pidgeoneer",
-    "crates/thermostat-web-demo",
 ]
 resolver = "2"
 
