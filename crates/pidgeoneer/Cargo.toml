@@ -2,6 +2,10 @@
 name = "pidgeoneer"
 version = "0.1.0"
 edition = "2021"
+repository = "https://github.com/security-union/pidgeon"
+keywords = ["pid", "control", "controller", "robotics", "automation"]
+categories = ["science", "embedded", "algorithms", "robotics"]
+readme = "README.md"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

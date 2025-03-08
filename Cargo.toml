@@ -9,7 +9,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 authors = ["Dario Alessandro"]
-repository = "https://github.com/darioalessandro/pidgeon"
+repository = "https://github.com/security-union/pidgeon"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
