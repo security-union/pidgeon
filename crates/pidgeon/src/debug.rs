@@ -1,6 +1,9 @@
-use iggy::messages::send_messages::Message;
+use iggy::client::{Client, UserClient};
+use iggy::messages::send_messages::{Message, Partitioning};
+use iggy::utils::duration::IggyDuration;
 #[cfg(feature = "debugging")]
 use serde::{Serialize, Deserialize};
+use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
 #[cfg(feature = "debugging")]
 use std::sync::mpsc::{channel, Sender};
@@ -14,7 +17,7 @@ use std::fs::OpenOptions;
 #[cfg(feature = "debugging")]
 use std::io::Write;
 #[cfg(feature = "debugging")]
-
+use iggy::clients::client::IggyClient;
 
 /// Configuration for PID controller debugging
 #[cfg(feature = "debugging")]
@@ -112,33 +115,23 @@ impl ControllerDebugger {
                 // Try to connect and create producer
                 match iggy::clients::client::IggyClient::from_connection_string(&connection_string) {
                     Ok(client) => {
+                        client.connect().await.unwrap();
                         println!("✅ Connected to Iggy server");
-
+                        client.login_user("iggy", "iggy").await.unwrap();
                         
+                        let mut producer = client
+                        .producer(&thread_config.stream_name, &thread_config.topic_name).unwrap()
+                        .batch_size(1000)
+                        .send_interval(IggyDuration::from_str("1ms").unwrap())
+                        .partitioning(Partitioning::balanced())
+                        .build();
+
+                        producer.init().await.unwrap();
+
+                        println!("✅ Producer initialized for stream '{}', topic '{}'", 
+                                thread_config.stream_name, thread_config.topic_name);
                         // Create a producer
-                        match client.producer(&thread_config.stream_name, &thread_config.topic_name) {
-                            Ok(producer_builder) => {
-                                // Build the producer with batch size of 1 to send immediately
-                                let mut producer = producer_builder.batch_size(1).build();
-                                
-                                // Initialize the producer
-                                match producer.init().await {
-                                    Ok(_) => {
-                                        println!("✅ Producer initialized for stream '{}', topic '{}'",
-                                                thread_config.stream_name, thread_config.topic_name);
-                                        Some(producer)
-                                    }
-                                    Err(e) => {
-                                        eprintln!("❌ Failed to initialize producer: {}", e);
-                                        None
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("❌ Failed to create producer: {}", e);
-                                None
-                            }
-                        }
+                        Some(producer)
                     }
                     Err(e) => {
                         eprintln!("❌ Failed to connect to Iggy server: {}", e);
@@ -149,7 +142,7 @@ impl ControllerDebugger {
             
             // Process messages from the channel
             match iggy_result {
-                Some(mut producer) => {
+                Some(producer) => {
                     println!("✅ Ready to send messages to Iggy");
                     
                     // Process debug data and send to Iggy
