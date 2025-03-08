@@ -34,7 +34,7 @@ pub fn App() -> impl IntoView {
         <Stylesheet id="leptos" href="/pkg/thermostat-web-demo.css"/>
 
         // sets the document title
-        <Title text="Welcome to Leptos"/>
+        <Title text="Smart Thermostat"/>
 
         // content for this welcome page
         <Router>
@@ -145,22 +145,22 @@ fn Thermostat() -> impl IntoView {
                 <div class="thermostat-ring">
                     <div class="temperature-indicator" style=move || format!("transform: {}", temp_rotation())></div>
                     <div class="temperature-marks">
-                        <span class="temp-mark mark-50">50°</span>
-                        <span class="temp-mark mark-60">60°</span>
-                        <span class="temp-mark mark-70">70°</span>
-                        <span class="temp-mark mark-80">80°</span>
-                        <span class="temp-mark mark-90">90°</span>
+                        <span class="temp-mark mark-50">"50°"</span>
+                        <span class="temp-mark mark-60">"60°"</span>
+                        <span class="temp-mark mark-70">"70°"</span>
+                        <span class="temp-mark mark-80">"80°"</span>
+                        <span class="temp-mark mark-90">"90°"</span>
                     </div>
                     <div class="temperature-display">
                         <div class="current-temp">
                             <span class="temp-label">"Current"</span>
                             <span class="temperature-value">{temperature}</span>
-                            <span class="temperature-unit">°F</span>
+                            <span class="temperature-unit">"°F"</span>
                         </div>
                         <div class="target-temp">
                             <span class="temp-label">"Target"</span>
                             <span class="temperature-value">{target_temp}</span>
-                            <span class="temperature-unit">°F</span>
+                            <span class="temperature-unit">"°F"</span>
                         </div>
                     </div>
                     <div class="system-state-indicator" class:active=is_active style=move || format!("background-color: {}", system_color())>
@@ -179,8 +179,8 @@ fn Thermostat() -> impl IntoView {
             </div>
             
             <div class="thermostat-info">
-                <p>Adjust temperature using the +/- buttons</p>
-                <p class="status-info">System status: <span style=move || format!("color: {}", system_color())>{system_status}</span></p>
+                <p>"Adjust temperature using the +/- buttons"</p>
+                <p class="status-info">"System status: " <span style=move || format!("color: {}", system_color())>{system_status}</span></p>
             </div>
         </div>
     }
