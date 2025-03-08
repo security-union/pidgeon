@@ -17,7 +17,11 @@ mod client_impl {
     
     impl IggyClient {
         /// Create a new IggyClient and set up WebSocket handlers
-        pub fn new(pid_data: WriteSignal<Vec<PidControllerData>>) -> Self {
+        pub fn new(
+            pid_data: WriteSignal<Vec<PidControllerData>>,
+            on_open: impl Fn() + 'static,
+            on_close: impl Fn() + 'static,
+        ) -> Self {
             info!("Creating new IggyClient in browser");
     
             // Construct WebSocket URL using current location
@@ -63,8 +67,10 @@ mod client_impl {
             onmessage_callback.forget();
     
             // Set up open handler
+            let on_open_clone = Box::new(on_open);
             let onopen_callback = Closure::<dyn FnMut()>::new(move || {
                 info!("WebSocket connection opened");
+                on_open_clone();
             });
             connection.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
             onopen_callback.forget();
@@ -78,12 +84,15 @@ mod client_impl {
     
             // Set up close handler
             let connection_clone = connection.clone();
+            let on_close_clone = Box::new(on_close);
             let onclose_callback = Closure::<dyn FnMut(_)>::new(move |e: CloseEvent| {
                 info!(
                     "WebSocket connection closed: code={}, reason={}",
                     e.code(),
                     e.reason()
                 );
+                
+                on_close_clone();
     
                 // Try to reconnect after a delay
                 let window = web_sys::window().expect("no global `window` exists");
@@ -125,7 +134,11 @@ mod server_impl {
     
     impl IggyClient {
         /// Create a new placeholder IggyClient for server-side
-        pub fn new(_pid_data: WriteSignal<Vec<PidControllerData>>) -> Self {
+        pub fn new(
+            _pid_data: WriteSignal<Vec<PidControllerData>>,
+            _on_open: impl Fn() + 'static,
+            _on_close: impl Fn() + 'static,
+        ) -> Self {
             info!("Creating placeholder IggyClient for server-side");
             Self
         }
