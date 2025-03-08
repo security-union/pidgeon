@@ -1,4 +1,4 @@
-use pidgeon::{ControllerConfig, PidController};
+use pidgeon::{ControllerConfig, ThreadSafePidController};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -22,7 +22,7 @@ fn main() {
         .with_output_limits(-100.0, 100.0)
         .with_anti_windup(true);
 
-    let controller = Arc::new(PidController::new(config));
+    let controller = Arc::new(ThreadSafePidController::new(config));
 
     // Simulation parameters
     let simulation_duration = 30; // seconds

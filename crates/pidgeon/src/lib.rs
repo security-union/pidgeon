@@ -29,7 +29,28 @@ pub struct ControllerConfig {
     max_output: f64,   // Maximum output value
     anti_windup: bool, // Whether to use anti-windup
     setpoint: f64,     // Target value (optional, can be set during operation)
+    deadband: f64,     // Error deadband (errors within ±deadband are treated as zero)
 }
+
+/// Error type for PID controller validation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PidError {
+    /// Invalid parameter value (NaN, infinity, or out of allowed range)
+    InvalidParameter(&'static str),
+    /// Mutex was poisoned, indicating a panic in another thread
+    MutexPoisoned,
+}
+
+impl std::fmt::Display for PidError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            PidError::InvalidParameter(param) => write!(f, "Invalid parameter: {}", param),
+            PidError::MutexPoisoned => write!(f, "Mutex was poisoned"),
+        }
+    }
+}
+
+impl std::error::Error for PidError {}
 
 impl Default for ControllerConfig {
     fn default() -> Self {
@@ -37,10 +58,11 @@ impl Default for ControllerConfig {
             kp: 1.0,
             ki: 0.0,
             kd: 0.0,
-            min_output: f64::NEG_INFINITY,
+            min_output: -f64::INFINITY,
             max_output: f64::INFINITY,
-            anti_windup: false,
+            anti_windup: true,
             setpoint: 0.0,
+            deadband: 0.0,
         }
     }
 }
@@ -52,19 +74,79 @@ impl ControllerConfig {
     }
 
     /// Set the proportional gain (Kp).
+    ///
+    /// # Arguments
+    ///
+    /// * `kp` - Proportional gain coefficient
+    ///
+    /// # Returns
+    ///
+    /// * The updated configuration builder
+    ///
+    /// # Notes
+    ///
+    /// While typically positive, negative values are allowed for specialized
+    /// control applications.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value is NaN or infinity
     pub fn with_kp(mut self, kp: f64) -> Self {
+        if !kp.is_finite() {
+            panic!("Kp must be a finite number, got: {}", kp);
+        }
         self.kp = kp;
         self
     }
 
     /// Set the integral gain (Ki).
+    ///
+    /// # Arguments
+    ///
+    /// * `ki` - Integral gain coefficient
+    ///
+    /// # Returns
+    ///
+    /// * The updated configuration builder
+    ///
+    /// # Notes
+    ///
+    /// While typically positive, negative values are allowed for specialized
+    /// control applications.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value is NaN or infinity
     pub fn with_ki(mut self, ki: f64) -> Self {
+        if !ki.is_finite() {
+            panic!("Ki must be a finite number, got: {}", ki);
+        }
         self.ki = ki;
         self
     }
 
     /// Set the derivative gain (Kd).
+    ///
+    /// # Arguments
+    ///
+    /// * `kd` - Derivative gain coefficient
+    ///
+    /// # Returns
+    ///
+    /// * The updated configuration builder
+    ///
+    /// # Notes
+    ///
+    /// While typically positive, negative values are allowed for specialized
+    /// control applications.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value is NaN or infinity
     pub fn with_kd(mut self, kd: f64) -> Self {
+        if !kd.is_finite() {
+            panic!("Kd must be a finite number, got: {}", kd);
+        }
         self.kd = kd;
         self
     }
@@ -83,8 +165,51 @@ impl ControllerConfig {
     }
 
     /// Set the initial setpoint (target value).
+    ///
+    /// # Arguments
+    ///
+    /// * `setpoint` - The target value for the controller
+    ///
+    /// # Returns
+    ///
+    /// * The updated configuration builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if the setpoint is NaN or infinity
     pub fn with_setpoint(mut self, setpoint: f64) -> Self {
+        if !setpoint.is_finite() {
+            panic!("Setpoint must be a finite number, got: {}", setpoint);
+        }
         self.setpoint = setpoint;
+        self
+    }
+
+    /// Set the deadband value (errors within ±deadband will be treated as zero).
+    ///
+    /// A deadband is useful to prevent control output changes for very small errors,
+    /// which can reduce mechanical wear in physical systems and prevent oscillations
+    /// in systems with backlash or measurement noise.
+    ///
+    /// # Arguments
+    ///
+    /// * `deadband` - The absolute error threshold below which errors are treated as zero
+    ///
+    /// # Returns
+    ///
+    /// * The updated configuration builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    /// - The deadband is negative (will convert to absolute value)
+    /// - The deadband is NaN or infinity
+    pub fn with_deadband(mut self, deadband: f64) -> Self {
+        if !deadband.is_finite() {
+            panic!("Deadband must be a finite number, got: {}", deadband);
+        }
+        
+        self.deadband = deadband.abs(); // Ensure positive value
         self
     }
 }
@@ -98,7 +223,9 @@ pub struct ControllerStatistics {
     pub rise_time: f64,     // Time to first reach the setpoint
 }
 
-/// A standard PID controller implementation.
+/// A non-thread-safe PID controller implementation.
+///
+/// Please use ThreadSafePidController for multi-threaded applications.
 ///
 /// This implementation follows the standard PID algorithm:
 /// u(t) = Kp * e(t) + Ki * ∫e(t)dt + Kd * de(t)/dt
@@ -107,7 +234,7 @@ pub struct ControllerStatistics {
 /// - u(t) is the control signal
 /// - e(t) is the error (setpoint - process_variable)
 /// - Kp, Ki, Kd are the proportional, integral, and derivative gains
-struct InternalPidController {
+pub struct PidController {
     config: ControllerConfig, // Controller configuration
     integral: f64,            // Accumulated integral term
     prev_error: f64,          // Previous error value (for derivative)
@@ -128,10 +255,10 @@ struct InternalPidController {
     debugger: Option<ControllerDebugger>,
 }
 
-impl InternalPidController {
+impl PidController {
     /// Create a new PID controller with the given configuration.
     pub fn new(config: ControllerConfig) -> Self {
-        InternalPidController {
+        PidController {
             config,
             integral: 0.0,
             prev_error: 0.0,
@@ -165,61 +292,65 @@ impl InternalPidController {
     /// # Returns
     /// The control output
     pub fn compute(&mut self, error: f64, dt: f64) -> f64 {
-        // Update statistics
+        // Update stats first (using the original error)
         self.update_statistics(error);
 
-        // On first run, initialize derivative term
-        if self.first_run {
-            self.prev_error = error;
-            self.first_run = false;
-        }
-
-        // Proportional term
-        let p_term = self.config.kp * error;
-
-        // Calculate integral before applying anti-windup
-        let pre_integral = self.integral + error * dt;
-
-        // Calculate output without limiting
-        let d_term = self.config.kd * (error - self.prev_error) / dt;
-        let raw_output = p_term + self.config.ki * pre_integral + d_term;
-
-        // Apply output limits
-        let mut output = raw_output;
-        if output > self.config.max_output {
-            output = self.config.max_output;
-        } else if output < self.config.min_output {
-            output = self.config.min_output;
-        }
-
-        // Apply anti-windup: only integrate if we're not saturated or if the integral would reduce saturation
-        if self.config.anti_windup {
-            if (output >= self.config.max_output && error > 0.0)
-                || (output <= self.config.min_output && error < 0.0)
-            {
-                // Don't increase integral when saturated in the same direction
-            } else {
-                // Update integral normally
-                self.integral = pre_integral;
-            }
+        // Apply deadband - if error is within ±deadband, treat as zero
+        let working_error = if error.abs() <= self.config.deadband {
+            0.0
         } else {
-            // Without anti-windup, always update integral
-            self.integral = pre_integral;
+            // Preserve sign but reduce magnitude by deadband
+            error - self.config.deadband * error.signum()
+        };
+
+        // Handle first run case
+        if self.first_run {
+            self.first_run = false;
+            self.prev_error = working_error;
+            return 0.0; // No control output on first run
         }
+
+        // Calculate P term
+        let p_term = self.config.kp * working_error;
+
+        // Calculate I term
+        self.integral += working_error * dt;
+        let i_term = self.config.ki * self.integral;
+
+        // Calculate D term (using filtered derivative to reduce noise)
+        let d_term = if dt > 0.0 {
+            self.config.kd * ((working_error - self.prev_error) / dt)
+        } else {
+            0.0
+        };
 
         // Store error for next iteration
-        self.prev_error = error;
+        self.prev_error = working_error;
 
-        // Send debug information if debugging is enabled
+        // Sum the terms
+        let mut output = p_term + i_term + d_term;
+
+        // Apply output limits
+        if output > self.config.max_output {
+            output = self.config.max_output;
+
+            // Anti-windup: prevent integral from growing when saturated
+            if self.config.anti_windup {
+                self.integral -= working_error * dt;
+            }
+        } else if output < self.config.min_output {
+            output = self.config.min_output;
+
+            // Anti-windup: prevent integral from growing when saturated
+            if self.config.anti_windup {
+                self.integral -= working_error * dt;
+            }
+        }
+
+        // Debugging
         #[cfg(feature = "debugging")]
-        if let Some(debugger) = &mut self.debugger {
-            debugger.send_debug_data(
-                error,
-                output,
-                p_term,
-                self.config.ki * self.integral,
-                d_term,
-            );
+        if let Some(ref mut debugger) = self.debugger {
+            debugger.log_pid_state(working_error, p_term, i_term, d_term, output, dt);
         }
 
         output
@@ -240,18 +371,66 @@ impl InternalPidController {
     }
 
     /// Set the proportional gain (Kp).
-    pub fn set_kp(&mut self, kp: f64) {
+    ///
+    /// # Arguments
+    ///
+    /// * `kp` - Proportional gain coefficient
+    ///
+    /// # Returns
+    ///
+    /// Result indicating success or validation error
+    ///
+    /// # Notes
+    ///
+    /// While typically positive, negative values are allowed for specialized applications.
+    pub fn set_kp(&mut self, kp: f64) -> Result<(), PidError> {
+        if !kp.is_finite() {
+            return Err(PidError::InvalidParameter("kp must be a finite number"));
+        }
         self.config.kp = kp;
+        Ok(())
     }
 
     /// Set the integral gain (Ki).
-    pub fn set_ki(&mut self, ki: f64) {
+    ///
+    /// # Arguments
+    ///
+    /// * `ki` - Integral gain coefficient
+    ///
+    /// # Returns
+    ///
+    /// Result indicating success or validation error
+    ///
+    /// # Notes
+    ///
+    /// While typically positive, negative values are allowed for specialized applications.
+    pub fn set_ki(&mut self, ki: f64) -> Result<(), PidError> {
+        if !ki.is_finite() {
+            return Err(PidError::InvalidParameter("ki must be a finite number"));
+        }
         self.config.ki = ki;
+        Ok(())
     }
 
     /// Set the derivative gain (Kd).
-    pub fn set_kd(&mut self, kd: f64) {
+    ///
+    /// # Arguments
+    ///
+    /// * `kd` - Derivative gain coefficient
+    ///
+    /// # Returns
+    ///
+    /// Result indicating success or validation error
+    ///
+    /// # Notes
+    ///
+    /// While typically positive, negative values are allowed for specialized applications.
+    pub fn set_kd(&mut self, kd: f64) -> Result<(), PidError> {
+        if !kd.is_finite() {
+            return Err(PidError::InvalidParameter("kd must be a finite number"));
+        }
         self.config.kd = kd;
+        Ok(())
     }
 
     /// Set the output limits.
@@ -266,8 +445,21 @@ impl InternalPidController {
     }
 
     /// Set the setpoint (target value).
-    pub fn set_setpoint(&mut self, setpoint: f64) {
+    ///
+    /// # Arguments
+    ///
+    /// * `setpoint` - The target value for the controller
+    ///
+    /// # Returns
+    ///
+    /// Result indicating success or validation error
+    pub fn set_setpoint(&mut self, setpoint: f64) -> Result<(), PidError> {
+        if !setpoint.is_finite() {
+            return Err(PidError::InvalidParameter("setpoint must be a finite number"));
+        }
+        
         self.config.setpoint = setpoint;
+        Ok(())
     }
 
     /// Get the setpoint (target value).
@@ -306,6 +498,24 @@ impl InternalPidController {
         self.settled_threshold = threshold;
     }
 
+    /// Set the deadband value.
+    ///
+    /// # Arguments
+    ///
+    /// * `deadband` - The absolute error threshold below which errors are treated as zero
+    ///
+    /// # Returns
+    ///
+    /// Result indicating success or validation error
+    pub fn set_deadband(&mut self, deadband: f64) -> Result<(), PidError> {
+        if !deadband.is_finite() {
+            return Err(PidError::InvalidParameter("deadband must be a finite number"));
+        }
+        
+        self.config.deadband = deadband.abs(); // Ensure positive value
+        Ok(())
+    }
+
     // Private method to update statistics
     fn update_statistics(&mut self, error: f64) {
         // Update error tracking
@@ -340,23 +550,23 @@ impl InternalPidController {
 ///
 /// This controller can be safely shared between threads, such as a sensor
 /// reading thread and a control output thread.
-pub struct PidController {
-    controller: Arc<Mutex<InternalPidController>>,
+pub struct ThreadSafePidController {
+    controller: Arc<Mutex<PidController>>,
 }
 
-impl Clone for PidController {
+impl Clone for ThreadSafePidController {
     fn clone(&self) -> Self {
-        PidController {
+        ThreadSafePidController {
             controller: Arc::clone(&self.controller),
         }
     }
 }
 
-impl PidController {
+impl ThreadSafePidController {
     /// Create a new thread-safe PID controller.
     pub fn new(config: ControllerConfig) -> Self {
-        PidController {
-            controller: Arc::new(Mutex::new(InternalPidController::new(config))),
+        ThreadSafePidController {
+            controller: Arc::new(Mutex::new(PidController::new(config))),
         }
     }
 
@@ -425,21 +635,24 @@ impl PidController {
     }
 
     /// Set the proportional gain (Kp).
-    pub fn set_kp(&self, kp: f64) {
-        let mut controller = self.controller.lock().unwrap();
-        controller.set_kp(kp);
+    pub fn set_kp(&self, kp: f64) -> Result<(), PidError> {
+        let mut controller = self.controller.lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
+        controller.set_kp(kp)
     }
 
     /// Set the integral gain (Ki).
-    pub fn set_ki(&self, ki: f64) {
-        let mut controller = self.controller.lock().unwrap();
-        controller.set_ki(ki);
+    pub fn set_ki(&self, ki: f64) -> Result<(), PidError> {
+        let mut controller = self.controller.lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
+        controller.set_ki(ki)
     }
 
     /// Set the derivative gain (Kd).
-    pub fn set_kd(&self, kd: f64) {
-        let mut controller = self.controller.lock().unwrap();
-        controller.set_kd(kd);
+    pub fn set_kd(&self, kd: f64) -> Result<(), PidError> {
+        let mut controller = self.controller.lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
+        controller.set_kd(kd)
     }
 
     /// Set the output limits.
@@ -449,15 +662,39 @@ impl PidController {
     }
 
     /// Set the setpoint (target value).
-    pub fn set_setpoint(&self, setpoint: f64) {
-        let mut controller = self.controller.lock().unwrap();
-        controller.set_setpoint(setpoint);
+    ///
+    /// # Arguments
+    ///
+    /// * `setpoint` - The target value for the controller
+    ///
+    /// # Returns
+    ///
+    /// Result indicating success or validation error
+    pub fn set_setpoint(&self, setpoint: f64) -> Result<(), PidError> {
+        let mut controller = self.controller.lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
+        controller.set_setpoint(setpoint)
     }
 
     /// Get the controller statistics.
     pub fn get_statistics(&self) -> ControllerStatistics {
         let controller = self.controller.lock().unwrap();
         controller.get_statistics()
+    }
+
+    /// Set the deadband value.
+    ///
+    /// # Arguments
+    ///
+    /// * `deadband` - The absolute error threshold below which errors are treated as zero
+    ///
+    /// # Returns
+    ///
+    /// Result indicating success or validation error
+    pub fn set_deadband(&self, deadband: f64) -> Result<(), PidError> {
+        let mut controller = self.controller.lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
+        controller.set_deadband(deadband)
     }
 }
 
@@ -476,7 +713,7 @@ mod tests {
             .with_kd(0.05)
             .with_output_limits(-100.0, 100.0);
 
-        let mut controller = InternalPidController::new(config);
+        let mut controller = PidController::new(config);
 
         // Test scenario: Start at 0, target is 10
         let mut process_value = 0.0;
@@ -518,8 +755,8 @@ mod tests {
             .with_output_limits(-1.0, 1.0)
             .with_anti_windup(true);
 
-        let mut controller_windup = InternalPidController::new(config_with_windup);
-        let mut controller_anti_windup = InternalPidController::new(config_with_anti_windup);
+        let mut controller_windup = PidController::new(config_with_windup);
+        let mut controller_anti_windup = PidController::new(config_with_anti_windup);
 
         // Create large error to cause windup
         let error = 10.0;
@@ -553,6 +790,52 @@ mod tests {
     }
 
     #[test]
+    fn test_deadband() {
+        // Create a controller with deadband of 5.0
+        let config = ControllerConfig::new()
+            .with_kp(1.0)    // P-only controller for clear results
+            .with_ki(0.0)
+            .with_kd(0.0)
+            .with_deadband(5.0)
+            .with_output_limits(-100.0, 100.0);
+
+        let mut controller = PidController::new(config);
+        
+        // Test 1: Error within deadband should result in zero output
+        let small_error = 3.0;  // < deadband of 5.0
+        let output1 = controller.compute(small_error, 0.1);
+        assert_eq!(output1, 0.0, "Error within deadband should produce zero output");
+        
+        // Test with negative error within deadband
+        let small_negative_error = -4.0;  // > -deadband of -5.0
+        let output2 = controller.compute(small_negative_error, 0.1);
+        assert_eq!(output2, 0.0, "Negative error within deadband should produce zero output");
+        
+        // Test 2: Error outside deadband should be reduced by deadband value
+        let large_error = 15.0;  // > deadband of 5.0
+        // With Kp=1.0, output should be (error - deadband) * Kp = (15 - 5) * 1 = 10
+        let output3 = controller.compute(large_error, 0.1);
+        assert_eq!(output3, 10.0, "Error outside deadband should be reduced by deadband");
+        
+        // Test with negative error outside deadband
+        let large_negative_error = -25.0;  // < -deadband of -5.0
+        // With Kp=1.0, output should be (error + deadband) * Kp = (-25 + 5) * 1 = -20
+        let output4 = controller.compute(large_negative_error, 0.1);
+        assert_eq!(output4, -20.0, "Negative error outside deadband should be reduced by deadband");
+        
+        // Test 3: Dynamically changing deadband
+        controller.set_deadband(10.0).unwrap();
+        
+        // Now the error of 15.0 should result in output of (15 - 10) * 1 = 5
+        let output5 = controller.compute(15.0, 0.1);
+        assert_eq!(output5, 5.0, "Output should reflect updated deadband value");
+        
+        // Test 4: Invalid deadband values
+        assert!(controller.set_deadband(f64::NAN).is_err());
+        assert!(controller.set_deadband(f64::INFINITY).is_err());
+    }
+
+    #[test]
     fn test_thread_safe_controller() {
         // Create thread-safe controller
         let config = ControllerConfig::new()
@@ -561,7 +844,7 @@ mod tests {
             .with_kd(0.0)
             .with_output_limits(-10.0, 10.0);
 
-        let controller = PidController::new(config);
+        let controller = ThreadSafePidController::new(config);
 
         // Clone controller for thread
         let thread_controller = controller.clone();
@@ -587,5 +870,74 @@ mod tests {
         // Check stats - should show that updates happened
         let stats = controller.get_statistics();
         assert!(stats.average_error > 0.0);
+    }
+
+    #[test]
+    fn test_parameter_validation() {
+        let mut controller = PidController::new(ControllerConfig::default());
+        
+        // Test setpoint validation
+        assert!(controller.set_setpoint(100.0).is_ok());
+        assert!(controller.set_setpoint(-100.0).is_ok());
+        assert!(controller.set_setpoint(f64::NAN).is_err());
+        assert!(controller.set_setpoint(f64::INFINITY).is_err());
+        
+        // Test deadband validation
+        assert!(controller.set_deadband(0.0).is_ok());
+        assert!(controller.set_deadband(10.0).is_ok());
+        assert!(controller.set_deadband(-5.0).is_ok()); // Should accept and convert to abs
+        assert!(controller.set_deadband(f64::NAN).is_err());
+        assert!(controller.set_deadband(f64::INFINITY).is_err());
+        
+        // Test gain constants validation
+        assert!(controller.set_kp(1.0).is_ok());
+        assert!(controller.set_kp(-1.0).is_ok()); // Negative values allowed
+        assert!(controller.set_kp(f64::NAN).is_err());
+        assert!(controller.set_kp(f64::INFINITY).is_err());
+        
+        assert!(controller.set_ki(0.5).is_ok());
+        assert!(controller.set_ki(-0.5).is_ok()); // Negative values allowed
+        assert!(controller.set_ki(f64::NAN).is_err());
+        assert!(controller.set_ki(f64::INFINITY).is_err());
+        
+        assert!(controller.set_kd(0.1).is_ok());
+        assert!(controller.set_kd(-0.1).is_ok()); // Negative values allowed
+        assert!(controller.set_kd(f64::NAN).is_err());
+        assert!(controller.set_kd(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn test_negative_gains() {
+        // Create a simple P-only controller with negative gain for clear results
+        let config = ControllerConfig::new()
+            .with_kp(-2.0)    // Negative proportional gain
+            .with_ki(0.0)     // No integral gain for simplicity
+            .with_kd(0.0)     // No derivative gain for simplicity
+            .with_setpoint(0.0)
+            .with_output_limits(-100.0, 100.0); // Ensure we don't hit limits
+            
+        let mut controller = PidController::new(config);
+        
+        // First call will initialize but not produce output due to first_run flag
+        let init_output = controller.compute(0.0, 0.1);
+        assert_eq!(init_output, 0.0, "First run should return 0.0");
+        
+        // Test with positive error should give negative output with Kp = -2.0
+        let positive_error = 5.0;
+        let output_for_positive = controller.compute(positive_error, 0.1);
+        // Expected: Kp * error = -2.0 * 5.0 = -10.0
+        assert_eq!(output_for_positive, -10.0, 
+            "With Kp=-2.0, error=5.0 should give output=-10.0, got {}", output_for_positive);
+        
+        // Reset controller for clean test
+        controller.reset();
+        let _ = controller.compute(0.0, 0.1); // Skip first run
+        
+        // Test with negative error should give positive output with Kp = -2.0
+        let negative_error = -5.0;
+        let output_for_negative = controller.compute(negative_error, 0.1);
+        // Expected: Kp * error = -2.0 * (-5.0) = 10.0
+        assert_eq!(output_for_negative, 10.0, 
+            "With Kp=-2.0, error=-5.0 should give output=10.0, got {}", output_for_negative);
     }
 }

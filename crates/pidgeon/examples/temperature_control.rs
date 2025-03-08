@@ -1,4 +1,4 @@
-use pidgeon::{ControllerConfig, PidController};
+use pidgeon::{ControllerConfig, ThreadSafePidController};
 use std::thread;
 use std::time::Duration;
 
@@ -19,7 +19,7 @@ fn main() {
         .with_output_limits(-100.0, 100.0) // Limit control signal (-100% to 100%)
         .with_anti_windup(true); // Prevent integral windup
 
-    let mut controller = PidController::new(config);
+    let controller = ThreadSafePidController::new(config);
 
     // Simulation parameters
     let setpoint = 22.0; // Target temperature in Celsius

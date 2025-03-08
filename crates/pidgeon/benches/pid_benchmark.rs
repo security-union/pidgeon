@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use pidgeon::{ControllerConfig, InternalPidController, PidController};
+use pidgeon::{ControllerConfig, InternalPidController, ThreadSafePidController};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -25,7 +25,7 @@ fn benchmark_pid_controller(c: &mut Criterion) {
     });
 
     // Benchmark thread-safe controller
-    let thread_safe_controller = Arc::new(PidController::new(config));
+    let thread_safe_controller = Arc::new(ThreadSafePidController::new(config));
 
     c.bench_function("thread_safe_pid_compute", |b| {
         b.iter(|| {
@@ -40,7 +40,7 @@ fn benchmark_pid_controller(c: &mut Criterion) {
     // Benchmark multi-threaded scenario
     c.bench_function("multi_threaded_pid", |b| {
         b.iter(|| {
-            let controller = Arc::new(PidController::new(config.clone()));
+            let controller = Arc::new(ThreadSafePidController::new(config.clone()));
             let controller_clone = Arc::clone(&controller);
 
             // Thread that updates errors
