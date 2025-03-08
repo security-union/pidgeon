@@ -1,12 +1,23 @@
-
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() {
-    use axum::Router;
+    use axum::{Router, routing::get, extract::WebSocketUpgrade};
     use leptos::logging::log;
     use leptos::prelude::*;
     use leptos_axum::{generate_route_list, LeptosRoutes};
     use pidgeoneer::app::*;
+    use pidgeoneer::websocket::{ws_handler, WebSocketState, start_iggy_consumer};
+    use std::sync::Arc;
+
+    // Set up logging
+    #[cfg(feature = "ssr")]
+    {
+        use env_logger;
+        let env = env_logger::Env::default().default_filter_or("info");
+        env_logger::Builder::from_env(env)
+            .filter(Some("pidgeoneer"), log::LevelFilter::Debug)
+            .init();
+    }
 
     let conf = get_configuration(None).unwrap();
     let addr = conf.leptos_options.site_addr;
@@ -14,7 +25,14 @@ async fn main() {
     // Generate the list of routes in your Leptos App
     let routes = generate_route_list(App);
 
+    // Create WebSocketState and Iggy consumer
+    let ws_state = Arc::new(WebSocketState::new());
+    start_iggy_consumer(ws_state.clone());
+
     let app = Router::new()
+        .route("/ws", get(move |ws: WebSocketUpgrade| async move {
+            ws.on_upgrade(move |socket| ws_handler(socket, ws_state.clone()))
+        }))
         .leptos_routes(&leptos_options, routes, {
             let leptos_options = leptos_options.clone();
             move || shell(leptos_options.clone())

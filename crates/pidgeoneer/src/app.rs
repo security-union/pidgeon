@@ -4,6 +4,8 @@ use leptos_router::{
     components::{Route, Router, Routes},
     StaticSegment,
 };
+use crate::models::PidControllerData;
+use crate::iggy_client::IggyClient;
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
@@ -11,7 +13,7 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
         <html lang="en">
             <head>
                 <meta charset="utf-8"/>
-                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
                 <AutoReload options=options.clone() />
                 <HydrationScripts options/>
                 <MetaTags/>
@@ -28,13 +30,24 @@ pub fn App() -> impl IntoView {
     // Provides context that manages stylesheets, titles, meta tags, etc.
     provide_meta_context();
 
+    // Create a signal to store PID controller data
+    let (_pid_data, set_pid_data) = signal(Vec::<PidControllerData>::new());
+    
+    // Initialize the IggyClient to receive data only in the browser
+    #[cfg(feature = "hydrate")]
+    let _iggy_client = IggyClient::new(set_pid_data);
+    
+    // For server-side, just use the variable to avoid unused warning
+    #[cfg(not(feature = "hydrate"))]
+    let _ = set_pid_data;
+
     view! {
         // injects a stylesheet into the document <head>
         // id=leptos means cargo-leptos will hot-reload this stylesheet
         <Stylesheet id="leptos" href="/pkg/pidgeoneer.css"/>
 
         // sets the document title
-        <Title text="Welcome to Leptos"/>
+        <Title text="Pidgeoneer - PID Controller Dashboard"/>
 
         // content for this welcome page
         <Router>
@@ -50,12 +63,11 @@ pub fn App() -> impl IntoView {
 /// Renders the home page of your application.
 #[component]
 fn HomePage() -> impl IntoView {
-    // Creates a reactive value to update the button
-    let count = RwSignal::new(0);
-    let on_click = move |_| *count.write() += 1;
-
+    // For now, just a placeholder until we get the server-side working
     view! {
-        <h1>"Welcome to Leptos!"</h1>
-        <button on:click=on_click>"Click Me: " {count}</button>
+        <div class="container">
+            <h1>"Pidgeoneer Dashboard"</h1>
+            <p>"Waiting for data from the server..."</p>
+        </div>
     }
 }

@@ -9,18 +9,28 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 leptos = { version = "0.7.0" }
 leptos_router = { version = "0.7.0" }
-axum = { version = "0.7", optional = true }
+axum = { version = "0.7", features = ["ws"], optional = true }
 console_error_panic_hook = { version = "0.1", optional = true}
 leptos_axum = { version = "0.7.0", optional = true }
 leptos_meta = { version = "0.7.0" }
-tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
 wasm-bindgen = { version = "=0.2.100", optional = true }
+log = "0.4.20"
+serde = { version = "1.0.193", features = ["derive"] }
+serde_json = "1.0.108"
+iggy = { version = "0.6.203", optional = true }
+futures = { version = "0.3", optional = true }
+web-sys = { version = "0.3.66", features = ["WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType"], optional = true }
+js-sys = { version = "0.3.66", optional = true }
+env_logger = { version = "0.11", optional = true }
 
 [features]
 hydrate = [
     "leptos/hydrate",
     "dep:console_error_panic_hook",
     "dep:wasm-bindgen",
+    "dep:web-sys",
+    "dep:js-sys",
 ]
 ssr = [
     "dep:axum",
@@ -29,6 +39,9 @@ ssr = [
     "leptos/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",
+    "dep:iggy",
+    "dep:futures",
+    "dep:env_logger",
 ]
 
 # Defines a size-optimized profile for the WASM bundle in release mode

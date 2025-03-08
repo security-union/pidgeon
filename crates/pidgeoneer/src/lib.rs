@@ -1,4 +1,8 @@
 pub mod app;
+pub mod models;
+pub mod iggy_client;
+#[cfg(feature = "ssr")]
+pub mod websocket;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
