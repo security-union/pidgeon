@@ -11,6 +11,7 @@ edition = "2021"
 authors = ["Dario Alessandro"]
 repository = "https://github.com/security-union/pidgeon"
 license = "MIT OR Apache-2.0"
+readme = "README.md"
 
 [workspace.dependencies]
 # Core dependencies

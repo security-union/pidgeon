@@ -8,7 +8,7 @@ repository = "https://github.com/security-union/pidgeon"
 license = "MIT OR Apache-2.0"
 keywords = ["pid", "control", "controller", "robotics", "automation"]
 categories = ["science", "embedded", "algorithms", "robotics"]
-readme = "README.md"
+readme = "../../README.md"
 
 [dependencies]
 # Optional dependencies for debugging

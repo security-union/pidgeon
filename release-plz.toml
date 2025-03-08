@@ -12,11 +12,6 @@ name = "pidgeon"
 publish = true
 path = "crates/pidgeon"
 
-[[package]]
-name = "pidgeoneer"
-publish = true
-path = "crates/pidgeoneer"
-
 # Whether to update the changelog file
 changelog = true
 
