@@ -289,8 +289,8 @@ impl PidController {
         ControllerStatistics {
             average_error: avg_error,
             max_overshoot: self.max_error,
-            settling_time: settling_time,
-            rise_time: rise_time,
+            settling_time,
+            rise_time,
         }
     }
 

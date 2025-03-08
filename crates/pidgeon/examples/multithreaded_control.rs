@@ -113,7 +113,7 @@ fn main() {
             }
 
             // Add disturbance midway through simulation
-            if time_elapsed >= 15.0 && time_elapsed < 15.5 {
+            if (15.0..15.5).contains(&time_elapsed) {
                 println!("\n>>> DISTURBANCE: Window opened, temperature dropping by 2°C <<<\n");
                 actuator_room.apply_disturbance(-2.0);
             }
@@ -154,8 +154,8 @@ impl SimulatedRoom {
         SimulatedRoom {
             temperature: std::sync::Mutex::new(init_temp),
             ambient_temperature: ambient_temp,
-            thermal_mass: thermal_mass,
-            hvac_power: hvac_power,
+            thermal_mass,
+            hvac_power,
             last_update: std::sync::Mutex::new(std::time::Instant::now()),
         }
     }
