@@ -5,8 +5,8 @@ async fn main() -> std::io::Result<()> {
     use actix_web::*;
     use leptos::*;
     use leptos_actix::{generate_route_list, LeptosRoutes};
-    use pidgeoneer::app::*;
     use log::info;
+    use pidgeoneer::app::*;
 
     let conf = get_configuration(None).await.unwrap();
     let addr = conf.leptos_options.site_addr;
@@ -59,21 +59,21 @@ pub fn main() {
     // a client-side main function is required for using `trunk serve`
     // prefer using `cargo leptos serve` instead
     // to run: `trunk serve --open --features csr`
-    use pidgeoneer::app::*;
     use leptos::*;
     use log::info;
+    use pidgeoneer::app::*;
 
     console_error_panic_hook::set_once();
 
     info!("Starting Pidgeoneer application");
-    
+
     mount_to_body(|| {
         // Create signal to store controller data
         let (pid_data, set_pid_data) = create_signal(Vec::<PidControllerData>::new());
-        
+
         // Initialize WebSocket connection
         let _client = iggy_client::IggyClient::new(set_pid_data);
-        
+
         view! {
             <App pid_data />
         }

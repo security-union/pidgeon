@@ -1,9 +1,9 @@
 use leptos::*;
 use leptos_meta::*;
 use leptos_router::*;
-use serde::{Serialize, Deserialize};
-use std::rc::Rc;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::rc::Rc;
 
 // Define the PID controller data structure to match what's sent by the backend
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -21,12 +21,12 @@ pub struct PidControllerData {
 pub fn App() -> impl IntoView {
     // Provides context that manages stylesheets, titles, meta tags, etc.
     provide_meta_context();
-    
+
     // Create signal to store controller data
     let (pid_data, set_pid_data) = create_signal(Vec::<PidControllerData>::new());
-    
+
     // Initialize WebSocket connection in main.rs
-    
+
     view! {
         // injects a stylesheet into the document <head>
         // id=leptos means cargo-leptos will hot-reload this stylesheet
@@ -51,21 +51,22 @@ pub fn App() -> impl IntoView {
 #[component]
 fn HomePage(pid_data: ReadSignal<Vec<PidControllerData>>) -> impl IntoView {
     let (selected_controller, set_selected_controller) = create_signal::<Option<String>>(None);
-    
+
     // Create a derived signal that filters data for the selected controller
     let filtered_data = create_memo(move |_| {
         let data = pid_data.get();
         let selected = selected_controller.get();
-        
+
         match selected {
-            Some(controller_id) => data.iter()
+            Some(controller_id) => data
+                .iter()
                 .filter(|d| d.controller_id == controller_id)
                 .cloned()
                 .collect::<Vec<_>>(),
             None => Vec::new(),
         }
     });
-    
+
     // Create a signal to hold all unique controller IDs
     let controller_ids = create_memo(move |_| {
         let data = pid_data.get();
@@ -79,7 +80,7 @@ fn HomePage(pid_data: ReadSignal<Vec<PidControllerData>>) -> impl IntoView {
     view! {
         <div class="container">
             <h1>"Pidgeoneer PID Controller Dashboard"</h1>
-            
+
             <div class="controller-selector">
                 <h2>"Select Controller"</h2>
                 <div class="controller-list">
@@ -91,21 +92,21 @@ fn HomePage(pid_data: ReadSignal<Vec<PidControllerData>>) -> impl IntoView {
                             ids.into_iter().map(|id| {
                                 let id_clone = id.clone();
                                 let is_selected = move || selected_controller.get() == Some(id.clone());
-                                view! { 
-                                    <button 
-                                        class="controller-button" 
+                                view! {
+                                    <button
+                                        class="controller-button"
                                         class:active=is_selected
                                         on:click=move |_| set_selected_controller.set(Some(id_clone.clone()))
                                     >
                                         {id.clone()}
-                                    </button> 
+                                    </button>
                                 }
                             }).collect_view()
                         }
                     }}
                 </div>
             </div>
-            
+
             <div class="dashboard-grid">
                 <div class="panel">
                     <h2>"Controller Data"</h2>

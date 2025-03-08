@@ -1,8 +1,14 @@
 use iggy::client::{Client, UserClient};
+#[cfg(feature = "debugging")]
+use iggy::clients::client::IggyClient;
 use iggy::messages::send_messages::{Message, Partitioning};
 use iggy::utils::duration::IggyDuration;
 #[cfg(feature = "debugging")]
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+#[cfg(feature = "debugging")]
+use std::fs::OpenOptions;
+#[cfg(feature = "debugging")]
+use std::io::Write;
 use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
 #[cfg(feature = "debugging")]
@@ -12,12 +18,6 @@ use std::sync::Arc;
 use std::thread;
 #[cfg(feature = "debugging")]
 use std::time::{Duration, Instant};
-#[cfg(feature = "debugging")]
-use std::fs::OpenOptions;
-#[cfg(feature = "debugging")]
-use std::io::Write;
-#[cfg(feature = "debugging")]
-use iggy::clients::client::IggyClient;
 
 /// Configuration for PID controller debugging
 #[cfg(feature = "debugging")]
@@ -82,24 +82,35 @@ impl ControllerDebugger {
     /// Create a new controller debugger with the given configuration
     pub fn new(config: DebugConfig) -> Self {
         let (tx, rx) = channel();
-        
+
         // Set up sampling interval if specified
-        let sample_interval = config.sample_rate_hz.map(|hz| Duration::from_secs_f64(1.0 / hz));
-        
+        let sample_interval = config
+            .sample_rate_hz
+            .map(|hz| Duration::from_secs_f64(1.0 / hz));
+
         // Clone config for the thread
         let thread_config = config.clone();
-        
+
         // Spawn a separate thread to handle debugging data
         thread::spawn(move || {
-            println!("🔍 PID controller debugging started for '{}'", thread_config.controller_id);
-            
+            println!(
+                "🔍 PID controller debugging started for '{}'",
+                thread_config.controller_id
+            );
+
             // Create and open a log file for debug data
             let log_filename = format!("{}_debug.log", thread_config.controller_id);
-            
+
             println!("📊 Debug data will be logged to {}", log_filename);
-            println!("⚠️  Attempting to connect to Iggy server at {}", thread_config.iggy_url);
-            println!("   Stream: {}, Topic: {}", thread_config.stream_name, thread_config.topic_name);
-            
+            println!(
+                "⚠️  Attempting to connect to Iggy server at {}",
+                thread_config.iggy_url
+            );
+            println!(
+                "   Stream: {}, Topic: {}",
+                thread_config.stream_name, thread_config.topic_name
+            );
+
             // Create a runtime for async operations
             let runtime = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
@@ -108,28 +119,32 @@ impl ControllerDebugger {
                     return;
                 }
             };
-            
+
             // Try to connect to Iggy client
             let connection_string = format!("iggy://iggy:iggy@{}", thread_config.iggy_url);
             let iggy_result = runtime.block_on(async {
                 // Try to connect and create producer
-                match iggy::clients::client::IggyClient::from_connection_string(&connection_string) {
+                match iggy::clients::client::IggyClient::from_connection_string(&connection_string)
+                {
                     Ok(client) => {
                         client.connect().await.unwrap();
                         println!("✅ Connected to Iggy server");
                         client.login_user("iggy", "iggy").await.unwrap();
-                        
+
                         let mut producer = client
-                        .producer(&thread_config.stream_name, &thread_config.topic_name).unwrap()
-                        .batch_size(1000)
-                        .send_interval(IggyDuration::from_str("1ms").unwrap())
-                        .partitioning(Partitioning::balanced())
-                        .build();
+                            .producer(&thread_config.stream_name, &thread_config.topic_name)
+                            .unwrap()
+                            .batch_size(1000)
+                            .send_interval(IggyDuration::from_str("1ms").unwrap())
+                            .partitioning(Partitioning::balanced())
+                            .build();
 
                         producer.init().await.unwrap();
 
-                        println!("✅ Producer initialized for stream '{}', topic '{}'", 
-                                thread_config.stream_name, thread_config.topic_name);
+                        println!(
+                            "✅ Producer initialized for stream '{}', topic '{}'",
+                            thread_config.stream_name, thread_config.topic_name
+                        );
                         // Create a producer
                         Some(producer)
                     }
@@ -139,35 +154,35 @@ impl ControllerDebugger {
                     }
                 }
             });
-            
+
             // Process messages from the channel
             match iggy_result {
                 Some(producer) => {
                     println!("✅ Ready to send messages to Iggy");
-                    
+
                     // Process debug data and send to Iggy
                     while let Ok(debug_data) = rx.recv() {
                         // Convert to JSON for display
                         if let Ok(json) = serde_json::to_string(&debug_data) {
                             println!("📤 Sending: {}", json);
-                            
+
                             // Write to log file as backup
                             if let Ok(mut file) = OpenOptions::new()
                                 .create(true)
                                 .append(true)
-                                .open(&log_filename) 
+                                .open(&log_filename)
                             {
                                 if let Err(e) = writeln!(file, "{}", json) {
                                     eprintln!("Error writing to log file: {}", e);
                                 }
                             }
-                            
+
                             let result = runtime.block_on(async {
                                 let payload = serde_json::to_vec(&debug_data).unwrap();
                                 let message = Message::new(None, payload.into(), None);
                                 producer.send(vec![message]).await
                             });
-                            
+
                             if let Err(e) = result {
                                 eprintln!("❌ Failed to send message to Iggy: {}", e);
                             }
@@ -176,18 +191,18 @@ impl ControllerDebugger {
                 }
                 None => {
                     println!("⚠️ Falling back to file logging only");
-                    
+
                     // If Iggy is not available, just log to file
                     while let Ok(debug_data) = rx.recv() {
                         // Convert to JSON
                         if let Ok(json) = serde_json::to_string(&debug_data) {
                             println!("📥 Logging: {}", json);
-                            
+
                             // Write to log file
                             if let Ok(mut file) = OpenOptions::new()
                                 .create(true)
                                 .append(true)
-                                .open(&log_filename) 
+                                .open(&log_filename)
                             {
                                 if let Err(e) = writeln!(file, "{}", json) {
                                     eprintln!("Error writing to log file: {}", e);
@@ -200,7 +215,7 @@ impl ControllerDebugger {
                 }
             }
         });
-        
+
         Self {
             config,
             tx,
@@ -208,9 +223,16 @@ impl ControllerDebugger {
             sample_interval,
         }
     }
-    
+
     /// Send debug data
-    pub fn send_debug_data(&mut self, error: f64, output: f64, p_term: f64, i_term: f64, d_term: f64) {
+    pub fn send_debug_data(
+        &mut self,
+        error: f64,
+        output: f64,
+        p_term: f64,
+        i_term: f64,
+        d_term: f64,
+    ) {
         // Check if we should send debug data (based on sampling rate)
         if let Some(interval) = self.sample_interval {
             let now = Instant::now();
@@ -219,7 +241,7 @@ impl ControllerDebugger {
             }
             self.last_sample = now;
         }
-        
+
         // Create debug data
         let debug_data = ControllerDebugData {
             timestamp: std::time::SystemTime::now()
@@ -233,10 +255,10 @@ impl ControllerDebugger {
             i_term,
             d_term,
         };
-        
+
         // Send debug data to channel
         if let Err(e) = self.tx.send(debug_data) {
             eprintln!("Failed to send debug data to channel: {}", e);
         }
     }
-} 
+}

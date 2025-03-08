@@ -26,7 +26,7 @@ fn benchmark_pid_controller(c: &mut Criterion) {
 
     // Benchmark thread-safe controller
     let thread_safe_controller = Arc::new(ThreadSafePidController::new(config));
-    
+
     c.bench_function("thread_safe_pid_compute", |b| {
         b.iter(|| {
             for i in 0..100 {
@@ -42,7 +42,7 @@ fn benchmark_pid_controller(c: &mut Criterion) {
         b.iter(|| {
             let controller = Arc::new(ThreadSafePidController::new(config.clone()));
             let controller_clone = Arc::clone(&controller);
-            
+
             // Thread that updates errors
             let update_thread = thread::spawn(move || {
                 for i in 0..50 {
@@ -50,14 +50,14 @@ fn benchmark_pid_controller(c: &mut Criterion) {
                     controller_clone.update_error(error, 0.01);
                 }
             });
-            
+
             // Thread that reads control signals
             let read_thread = thread::spawn(move || {
                 for _ in 0..20 {
                     let _ = controller.get_control_signal();
                 }
             });
-            
+
             // Wait for both threads
             update_thread.join().unwrap();
             read_thread.join().unwrap();
@@ -66,4 +66,4 @@ fn benchmark_pid_controller(c: &mut Criterion) {
 }
 
 criterion_group!(benches, benchmark_pid_controller);
-criterion_main!(benches); 
+criterion_main!(benches);
