@@ -1,4 +1,3 @@
-use crate::iggy_client::IggyClient;
 use crate::models::PidControllerData;
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
@@ -6,7 +5,6 @@ use leptos_router::{
     components::{Route, Router, Routes},
     StaticSegment,
 };
-use std::collections::HashMap;
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
