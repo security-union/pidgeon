@@ -1,12 +1,12 @@
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() {
-    use axum::{Router, routing::get, extract::WebSocketUpgrade};
+    use axum::{extract::WebSocketUpgrade, routing::get, Router};
     use leptos::logging::log;
     use leptos::prelude::*;
     use leptos_axum::{generate_route_list, LeptosRoutes};
     use pidgeoneer::app::*;
-    use pidgeoneer::websocket::{ws_handler, WebSocketState, start_iggy_consumer};
+    use pidgeoneer::websocket::{start_iggy_consumer, ws_handler, WebSocketState};
     use std::sync::Arc;
 
     // Set up logging
@@ -30,9 +30,12 @@ async fn main() {
     start_iggy_consumer(ws_state.clone());
 
     let app = Router::new()
-        .route("/ws", get(move |ws: WebSocketUpgrade| async move {
-            ws.on_upgrade(move |socket| ws_handler(socket, ws_state.clone()))
-        }))
+        .route(
+            "/ws",
+            get(move |ws: WebSocketUpgrade| async move {
+                ws.on_upgrade(move |socket| ws_handler(socket, ws_state.clone()))
+            }),
+        )
         .leptos_routes(&leptos_options, routes, {
             let leptos_options = leptos_options.clone();
             move || shell(leptos_options.clone())

@@ -1,11 +1,11 @@
+use crate::iggy_client::IggyClient;
+use crate::models::PidControllerData;
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
     components::{Route, Router, Routes},
     StaticSegment,
 };
-use crate::models::PidControllerData;
-use crate::iggy_client::IggyClient;
 use std::collections::HashMap;
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -122,27 +122,27 @@ pub fn App() -> impl IntoView {
 
     // Create a signal to store PID controller data
     let (pid_data, set_pid_data) = signal(Vec::<PidControllerData>::new());
-    
+
     // Create a signal to track connection status
     let (connected, set_connected) = signal(false);
-    
+
     // Initialize the IggyClient to receive data only in the browser
     #[cfg(feature = "hydrate")]
     {
         let set_connected_clone = set_connected.clone();
-        
+
         // Create WebSocket connection callbacks
         let on_open = move || {
             set_connected_clone.set(true);
         };
-        
+
         let on_close = move || {
             set_connected.set(false);
         };
-        
+
         let _iggy_client = IggyClient::new(set_pid_data, on_open, on_close);
     }
-    
+
     // For server-side, just use the variables to avoid unused warning
     #[cfg(not(feature = "hydrate"))]
     {
@@ -157,11 +157,11 @@ pub fn App() -> impl IntoView {
         <Router>
             <main>
                 <Routes fallback=|| "Page not found.".into_view()>
-                    <Route path=StaticSegment("") view=move || view! { 
-                        <HomePage 
+                    <Route path=StaticSegment("") view=move || view! {
+                        <HomePage
                             pid_data=pid_data
-                            connected=connected 
-                        /> 
+                            connected=connected
+                        />
                     }/>
                 </Routes>
             </main>
@@ -181,11 +181,11 @@ fn HomePage(
                 {move || if connected.get() { "Connected" } else { "Disconnected" }}
             </div>
         </header>
-        
+
         <div class="dashboard">
             <div class="pid-data-list">
                 <h2>"Controller Data"</h2>
-                
+
                 // Create a container for data cards
                 <div>
                     // Show waiting message when no data is available
@@ -203,7 +203,7 @@ fn HomePage(
                                 let p_term_format = format!("{:.4}", item.p_term);
                                 let i_term_format = format!("{:.4}", item.i_term);
                                 let d_term_format = format!("{:.4}", item.d_term);
-                                
+
                                 view! {
                                     <div class="pid-data-card">
                                         <h3>{controller_id}</h3>

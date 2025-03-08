@@ -10,4 +10,4 @@ pub struct PidControllerData {
     pub p_term: f64,
     pub i_term: f64,
     pub d_term: f64,
-} 
+}

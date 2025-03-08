@@ -1,6 +1,6 @@
 pub mod app;
-pub mod models;
 pub mod iggy_client;
+pub mod models;
 #[cfg(feature = "ssr")]
 pub mod websocket;
 
