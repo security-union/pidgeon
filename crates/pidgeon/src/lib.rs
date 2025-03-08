@@ -1,6 +1,13 @@
 // Pidgeon: A robust PID controller library written in Rust
-// Copyright 2024
+// Copyright (c) 2025 Security Union LLC
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -100,7 +107,7 @@ pub struct ControllerStatistics {
 /// - u(t) is the control signal
 /// - e(t) is the error (setpoint - process_variable)
 /// - Kp, Ki, Kd are the proportional, integral, and derivative gains
-pub struct PidController {
+struct InternalPidController {
     config: ControllerConfig, // Controller configuration
     integral: f64,            // Accumulated integral term
     prev_error: f64,          // Previous error value (for derivative)
@@ -121,10 +128,10 @@ pub struct PidController {
     debugger: Option<ControllerDebugger>,
 }
 
-impl PidController {
+impl InternalPidController {
     /// Create a new PID controller with the given configuration.
     pub fn new(config: ControllerConfig) -> Self {
-        PidController {
+        InternalPidController {
             config,
             integral: 0.0,
             prev_error: 0.0,
@@ -333,22 +340,61 @@ impl PidController {
 ///
 /// This controller can be safely shared between threads, such as a sensor
 /// reading thread and a control output thread.
-pub struct ThreadSafePidController {
-    controller: Mutex<PidController>,
+pub struct PidController {
+    controller: Arc<Mutex<InternalPidController>>,
 }
 
-impl ThreadSafePidController {
+impl Clone for PidController {
+    fn clone(&self) -> Self {
+        PidController {
+            controller: Arc::clone(&self.controller),
+        }
+    }
+}
+
+impl PidController {
     /// Create a new thread-safe PID controller.
     pub fn new(config: ControllerConfig) -> Self {
-        ThreadSafePidController {
-            controller: Mutex::new(PidController::new(config)),
+        PidController {
+            controller: Arc::new(Mutex::new(InternalPidController::new(config))),
         }
     }
 
-    /// Update the controller with a new error measurement.
-    pub fn update_error(&self, error: f64, dt: f64) -> f64 {
+    /// Update the controller with a new error measurement and compute the control output.
+    ///
+    /// # Parameters
+    ///
+    /// * `error` - The current error value (setpoint - measured_value)
+    /// * `dt` - Time delta in seconds since the last update
+    ///
+    /// # Time Delta (dt)
+    ///
+    /// The `dt` parameter represents the time elapsed since the last controller update, in seconds.
+    /// This is crucial for properly scaling the integral and derivative terms of the PID algorithm.
+    ///
+    /// Common ways to determine `dt`:
+    ///
+    /// 1. Fixed time step: If your control loop runs at a fixed frequency (e.g., 100Hz),
+    ///    you can use a constant value (`dt = 0.01` for 100Hz).
+    ///
+    /// 2. Measured time: Calculate the actual elapsed time between calls:
+    ///    ```
+    ///    let mut last_update_time = std::time::Instant::now(); // In the real world, this would be the last time the controller was updated
+    ///    let now = std::time::Instant::now();
+    ///    let dt = now.duration_since(last_update_time).as_secs_f64();
+    ///    last_update_time = now;
+    ///    ```
+    ///
+    /// Choose the approach that best fits your application's requirements for timing accuracy.
+    pub fn compute(&self, error: f64, dt: f64) -> f64 {
         let mut controller = self.controller.lock().unwrap();
         controller.compute(error, dt)
+    }
+
+    /// Reset the controller state.
+    pub fn reset(&self) {
+        let mut controller = self.controller.lock().unwrap();
+        controller.reset();
     }
 
     /// Get the current control signal.
@@ -360,10 +406,11 @@ impl ThreadSafePidController {
             return 0.0;
         }
 
-        // Otherwise, return the last computed output (implied by P, I, D terms)
+        // For getting the last control signal, we don't want to modify state
+        // So we create a simplified version without updating internal state
         let p_term = controller.config.kp * controller.prev_error;
         let i_term = controller.config.ki * controller.integral;
-        let d_term = 0.0; // Can't compute derivative here without new measurement
+        let d_term = 0.0; // No derivative term when just retrieving the signal
 
         let mut output = p_term + i_term + d_term;
 
@@ -375,12 +422,6 @@ impl ThreadSafePidController {
         }
 
         output
-    }
-
-    /// Reset the controller to its initial state.
-    pub fn reset(&self) {
-        let mut controller = self.controller.lock().unwrap();
-        controller.reset();
     }
 
     /// Set the proportional gain (Kp).
@@ -435,7 +476,7 @@ mod tests {
             .with_kd(0.05)
             .with_output_limits(-100.0, 100.0);
 
-        let mut controller = PidController::new(config);
+        let mut controller = InternalPidController::new(config);
 
         // Test scenario: Start at 0, target is 10
         let mut process_value = 0.0;
@@ -477,8 +518,8 @@ mod tests {
             .with_output_limits(-1.0, 1.0)
             .with_anti_windup(true);
 
-        let mut controller_windup = PidController::new(config_with_windup);
-        let mut controller_anti_windup = PidController::new(config_with_anti_windup);
+        let mut controller_windup = InternalPidController::new(config_with_windup);
+        let mut controller_anti_windup = InternalPidController::new(config_with_anti_windup);
 
         // Create large error to cause windup
         let error = 10.0;
@@ -513,8 +554,6 @@ mod tests {
 
     #[test]
     fn test_thread_safe_controller() {
-        use std::sync::Arc;
-
         // Create thread-safe controller
         let config = ControllerConfig::new()
             .with_kp(1.0)
@@ -522,16 +561,16 @@ mod tests {
             .with_kd(0.0)
             .with_output_limits(-10.0, 10.0);
 
-        let controller = Arc::new(ThreadSafePidController::new(config));
+        let controller = PidController::new(config);
 
         // Clone controller for thread
-        let thread_controller = Arc::clone(&controller);
+        let thread_controller = controller.clone();
 
         // Start a thread that updates the controller rapidly
         let handle = thread::spawn(move || {
             for i in 0..100 {
                 let error = 10.0 - (i as f64 * 0.1);
-                thread_controller.update_error(error, 0.01);
+                thread_controller.compute(error, 0.01);
                 thread::sleep(Duration::from_millis(1));
             }
         });

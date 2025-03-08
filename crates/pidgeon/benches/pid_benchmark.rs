@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use pidgeon::{ControllerConfig, PidController, ThreadSafePidController};
+use pidgeon::{ControllerConfig, InternalPidController, PidController};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -11,7 +11,7 @@ fn benchmark_pid_controller(c: &mut Criterion) {
         .with_kd(0.05)
         .with_output_limits(-100.0, 100.0);
 
-    let mut controller = PidController::new(config.clone());
+    let mut controller = InternalPidController::new(config.clone());
 
     // Benchmark single threaded performance
     c.bench_function("pid_compute", |b| {
@@ -25,14 +25,14 @@ fn benchmark_pid_controller(c: &mut Criterion) {
     });
 
     // Benchmark thread-safe controller
-    let thread_safe_controller = Arc::new(ThreadSafePidController::new(config));
+    let thread_safe_controller = Arc::new(PidController::new(config));
 
     c.bench_function("thread_safe_pid_compute", |b| {
         b.iter(|| {
             for i in 0..100 {
                 let error = black_box(10.0 - (i as f64 * 0.1));
                 let dt = black_box(0.01);
-                black_box(thread_safe_controller.update_error(error, dt));
+                black_box(thread_safe_controller.compute(error, dt));
             }
         })
     });
@@ -40,14 +40,14 @@ fn benchmark_pid_controller(c: &mut Criterion) {
     // Benchmark multi-threaded scenario
     c.bench_function("multi_threaded_pid", |b| {
         b.iter(|| {
-            let controller = Arc::new(ThreadSafePidController::new(config.clone()));
+            let controller = Arc::new(PidController::new(config.clone()));
             let controller_clone = Arc::clone(&controller);
 
             // Thread that updates errors
             let update_thread = thread::spawn(move || {
                 for i in 0..50 {
                     let error = 10.0 - (i as f64 * 0.1);
-                    controller_clone.update_error(error, 0.01);
+                    controller_clone.compute(error, 0.01);
                 }
             });
 

@@ -1,4 +1,4 @@
-use pidgeon::{ControllerConfig, ThreadSafePidController};
+use pidgeon::{ControllerConfig, PidController};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -22,7 +22,7 @@ fn main() {
         .with_output_limits(-100.0, 100.0)
         .with_anti_windup(true);
 
-    let controller = Arc::new(ThreadSafePidController::new(config));
+    let controller = Arc::new(PidController::new(config));
 
     // Simulation parameters
     let simulation_duration = 30; // seconds
@@ -64,7 +64,7 @@ fn main() {
             time_elapsed += dt;
 
             // Update controller with new error measurement
-            sensor_controller.update_error(error, dt);
+            sensor_controller.compute(error, dt);
 
             println!(
                 "SENSOR    | Time: {:5.1}s | Reading: {:5.2}°C | Error: {:+5.2}°C",

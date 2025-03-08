@@ -1,4 +1,4 @@
-use pidgeon::{ControllerConfig, PidController};
+use pidgeon::{ControllerConfig, InternalPidController};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -40,11 +40,11 @@ fn main() {
         };
 
         // Create controller with debugging
-        PidController::new(config).with_debugging(debug_config)
+        InternalPidController::new(config).with_debugging(debug_config)
     };
 
     #[cfg(not(feature = "debugging"))]
-    let mut controller = PidController::new(config);
+    let mut controller = InternalPidController::new(config);
 
     #[cfg(feature = "debugging")]
     let mut controller = controller;
