@@ -208,7 +208,7 @@ impl ControllerConfig {
         if !deadband.is_finite() {
             panic!("Deadband must be a finite number, got: {}", deadband);
         }
-        
+
         self.deadband = deadband.abs(); // Ensure positive value
         self
     }
@@ -455,9 +455,11 @@ impl PidController {
     /// Result indicating success or validation error
     pub fn set_setpoint(&mut self, setpoint: f64) -> Result<(), PidError> {
         if !setpoint.is_finite() {
-            return Err(PidError::InvalidParameter("setpoint must be a finite number"));
+            return Err(PidError::InvalidParameter(
+                "setpoint must be a finite number",
+            ));
         }
-        
+
         self.config.setpoint = setpoint;
         Ok(())
     }
@@ -509,9 +511,11 @@ impl PidController {
     /// Result indicating success or validation error
     pub fn set_deadband(&mut self, deadband: f64) -> Result<(), PidError> {
         if !deadband.is_finite() {
-            return Err(PidError::InvalidParameter("deadband must be a finite number"));
+            return Err(PidError::InvalidParameter(
+                "deadband must be a finite number",
+            ));
         }
-        
+
         self.config.deadband = deadband.abs(); // Ensure positive value
         Ok(())
     }
@@ -636,21 +640,27 @@ impl ThreadSafePidController {
 
     /// Set the proportional gain (Kp).
     pub fn set_kp(&self, kp: f64) -> Result<(), PidError> {
-        let mut controller = self.controller.lock()
+        let mut controller = self
+            .controller
+            .lock()
             .map_err(|_| PidError::MutexPoisoned)?;
         controller.set_kp(kp)
     }
 
     /// Set the integral gain (Ki).
     pub fn set_ki(&self, ki: f64) -> Result<(), PidError> {
-        let mut controller = self.controller.lock()
+        let mut controller = self
+            .controller
+            .lock()
             .map_err(|_| PidError::MutexPoisoned)?;
         controller.set_ki(ki)
     }
 
     /// Set the derivative gain (Kd).
     pub fn set_kd(&self, kd: f64) -> Result<(), PidError> {
-        let mut controller = self.controller.lock()
+        let mut controller = self
+            .controller
+            .lock()
             .map_err(|_| PidError::MutexPoisoned)?;
         controller.set_kd(kd)
     }
@@ -671,7 +681,9 @@ impl ThreadSafePidController {
     ///
     /// Result indicating success or validation error
     pub fn set_setpoint(&self, setpoint: f64) -> Result<(), PidError> {
-        let mut controller = self.controller.lock()
+        let mut controller = self
+            .controller
+            .lock()
             .map_err(|_| PidError::MutexPoisoned)?;
         controller.set_setpoint(setpoint)
     }
@@ -692,7 +704,9 @@ impl ThreadSafePidController {
     ///
     /// Result indicating success or validation error
     pub fn set_deadband(&self, deadband: f64) -> Result<(), PidError> {
-        let mut controller = self.controller.lock()
+        let mut controller = self
+            .controller
+            .lock()
             .map_err(|_| PidError::MutexPoisoned)?;
         controller.set_deadband(deadband)
     }
@@ -793,43 +807,55 @@ mod tests {
     fn test_deadband() {
         // Create a controller with deadband of 5.0
         let config = ControllerConfig::new()
-            .with_kp(1.0)    // P-only controller for clear results
+            .with_kp(1.0) // P-only controller for clear results
             .with_ki(0.0)
             .with_kd(0.0)
             .with_deadband(5.0)
             .with_output_limits(-100.0, 100.0);
 
         let mut controller = PidController::new(config);
-        
+
         // Test 1: Error within deadband should result in zero output
-        let small_error = 3.0;  // < deadband of 5.0
+        let small_error = 3.0; // < deadband of 5.0
         let output1 = controller.compute(small_error, 0.1);
-        assert_eq!(output1, 0.0, "Error within deadband should produce zero output");
-        
+        assert_eq!(
+            output1, 0.0,
+            "Error within deadband should produce zero output"
+        );
+
         // Test with negative error within deadband
-        let small_negative_error = -4.0;  // > -deadband of -5.0
+        let small_negative_error = -4.0; // > -deadband of -5.0
         let output2 = controller.compute(small_negative_error, 0.1);
-        assert_eq!(output2, 0.0, "Negative error within deadband should produce zero output");
-        
+        assert_eq!(
+            output2, 0.0,
+            "Negative error within deadband should produce zero output"
+        );
+
         // Test 2: Error outside deadband should be reduced by deadband value
-        let large_error = 15.0;  // > deadband of 5.0
-        // With Kp=1.0, output should be (error - deadband) * Kp = (15 - 5) * 1 = 10
+        let large_error = 15.0; // > deadband of 5.0
+                                // With Kp=1.0, output should be (error - deadband) * Kp = (15 - 5) * 1 = 10
         let output3 = controller.compute(large_error, 0.1);
-        assert_eq!(output3, 10.0, "Error outside deadband should be reduced by deadband");
-        
+        assert_eq!(
+            output3, 10.0,
+            "Error outside deadband should be reduced by deadband"
+        );
+
         // Test with negative error outside deadband
-        let large_negative_error = -25.0;  // < -deadband of -5.0
-        // With Kp=1.0, output should be (error + deadband) * Kp = (-25 + 5) * 1 = -20
+        let large_negative_error = -25.0; // < -deadband of -5.0
+                                          // With Kp=1.0, output should be (error + deadband) * Kp = (-25 + 5) * 1 = -20
         let output4 = controller.compute(large_negative_error, 0.1);
-        assert_eq!(output4, -20.0, "Negative error outside deadband should be reduced by deadband");
-        
+        assert_eq!(
+            output4, -20.0,
+            "Negative error outside deadband should be reduced by deadband"
+        );
+
         // Test 3: Dynamically changing deadband
         controller.set_deadband(10.0).unwrap();
-        
+
         // Now the error of 15.0 should result in output of (15 - 10) * 1 = 5
         let output5 = controller.compute(15.0, 0.1);
         assert_eq!(output5, 5.0, "Output should reflect updated deadband value");
-        
+
         // Test 4: Invalid deadband values
         assert!(controller.set_deadband(f64::NAN).is_err());
         assert!(controller.set_deadband(f64::INFINITY).is_err());
@@ -875,31 +901,31 @@ mod tests {
     #[test]
     fn test_parameter_validation() {
         let mut controller = PidController::new(ControllerConfig::default());
-        
+
         // Test setpoint validation
         assert!(controller.set_setpoint(100.0).is_ok());
         assert!(controller.set_setpoint(-100.0).is_ok());
         assert!(controller.set_setpoint(f64::NAN).is_err());
         assert!(controller.set_setpoint(f64::INFINITY).is_err());
-        
+
         // Test deadband validation
         assert!(controller.set_deadband(0.0).is_ok());
         assert!(controller.set_deadband(10.0).is_ok());
         assert!(controller.set_deadband(-5.0).is_ok()); // Should accept and convert to abs
         assert!(controller.set_deadband(f64::NAN).is_err());
         assert!(controller.set_deadband(f64::INFINITY).is_err());
-        
+
         // Test gain constants validation
         assert!(controller.set_kp(1.0).is_ok());
         assert!(controller.set_kp(-1.0).is_ok()); // Negative values allowed
         assert!(controller.set_kp(f64::NAN).is_err());
         assert!(controller.set_kp(f64::INFINITY).is_err());
-        
+
         assert!(controller.set_ki(0.5).is_ok());
         assert!(controller.set_ki(-0.5).is_ok()); // Negative values allowed
         assert!(controller.set_ki(f64::NAN).is_err());
         assert!(controller.set_ki(f64::INFINITY).is_err());
-        
+
         assert!(controller.set_kd(0.1).is_ok());
         assert!(controller.set_kd(-0.1).is_ok()); // Negative values allowed
         assert!(controller.set_kd(f64::NAN).is_err());
@@ -910,34 +936,40 @@ mod tests {
     fn test_negative_gains() {
         // Create a simple P-only controller with negative gain for clear results
         let config = ControllerConfig::new()
-            .with_kp(-2.0)    // Negative proportional gain
-            .with_ki(0.0)     // No integral gain for simplicity
-            .with_kd(0.0)     // No derivative gain for simplicity
+            .with_kp(-2.0) // Negative proportional gain
+            .with_ki(0.0) // No integral gain for simplicity
+            .with_kd(0.0) // No derivative gain for simplicity
             .with_setpoint(0.0)
             .with_output_limits(-100.0, 100.0); // Ensure we don't hit limits
-            
+
         let mut controller = PidController::new(config);
-        
+
         // First call will initialize but not produce output due to first_run flag
         let init_output = controller.compute(0.0, 0.1);
         assert_eq!(init_output, 0.0, "First run should return 0.0");
-        
+
         // Test with positive error should give negative output with Kp = -2.0
         let positive_error = 5.0;
         let output_for_positive = controller.compute(positive_error, 0.1);
         // Expected: Kp * error = -2.0 * 5.0 = -10.0
-        assert_eq!(output_for_positive, -10.0, 
-            "With Kp=-2.0, error=5.0 should give output=-10.0, got {}", output_for_positive);
-        
+        assert_eq!(
+            output_for_positive, -10.0,
+            "With Kp=-2.0, error=5.0 should give output=-10.0, got {}",
+            output_for_positive
+        );
+
         // Reset controller for clean test
         controller.reset();
         let _ = controller.compute(0.0, 0.1); // Skip first run
-        
+
         // Test with negative error should give positive output with Kp = -2.0
         let negative_error = -5.0;
         let output_for_negative = controller.compute(negative_error, 0.1);
         // Expected: Kp * error = -2.0 * (-5.0) = 10.0
-        assert_eq!(output_for_negative, 10.0, 
-            "With Kp=-2.0, error=-5.0 should give output=10.0, got {}", output_for_negative);
+        assert_eq!(
+            output_for_negative, 10.0,
+            "With Kp=-2.0, error=-5.0 should give output=10.0, got {}",
+            output_for_negative
+        );
     }
 }
