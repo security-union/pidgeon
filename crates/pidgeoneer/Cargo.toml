@@ -4,7 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+name = "pidgeoneer"
+path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
+
+# Main binary - the server application
+[[bin]]
+name = "pidgeoneer-server"  # A more descriptive name
+path = "src/bin/server.rs"
+required-features = ["ssr"]
+
+# If you have a web client binary
+[[bin]]
+name = "pidgeoneer-client"  # Or whatever makes sense
+path = "src/main.rs"
+required-features = ["hydrate"]
 
 [dependencies]
 # Pidgeon crate
@@ -13,7 +27,15 @@ pidgeon = { path = "../pidgeon", features = ["debugging"] }
 # Server
 actix-files = { version = "0.6", optional = true }
 actix-web = { version = "4", optional = true, features = ["macros"] }
+actix-web-actors = { version = "4.2", optional = true }
+actix = { version = "0.13", optional = true }
 http = { version = "1.0.0", optional = true }
+futures-util = { version = "0.3", optional = true }
+
+# Iggy client for server-side
+iggy = { version = "0.6.203", optional = true }
+tokio = { version = "1.32", features = ["full"], optional = true }
+env_logger = { version = "0.10", optional = true }
 
 # Serialization
 serde = { version = "1.0" }
@@ -39,6 +61,9 @@ web-sys = { version = "0.3", features = [
     "WebSocket",
     "MessageEvent",
     "BinaryType",
+    "ErrorEvent",
+    "CloseEvent",
+    "Location",
 ]}
 
 [features]
@@ -47,7 +72,13 @@ hydrate = ["leptos/hydrate", "leptos_meta/hydrate", "leptos_router/hydrate"]
 ssr = [
   "dep:actix-files",
   "dep:actix-web",
+  "dep:actix-web-actors",
+  "dep:actix",
   "dep:leptos_actix",
+  "dep:iggy",
+  "dep:tokio",
+  "dep:env_logger",
+  "dep:futures-util",
   "leptos/ssr",
   "leptos_meta/ssr",
   "leptos_router/ssr",
@@ -113,3 +144,5 @@ lib-default-features = false
 #
 # Optional. Defaults to "release".
 lib-profile-release = "wasm-release"
+
+bin-target = "pidgeoneer-server" # Tell leptos which binary to use
