@@ -15,5 +15,11 @@ publish = true
 changelog_update = true
 git_release_enable = true
 
+[[package]]
+name = "pidgeoneer"
+publish = false
+changelog_update = false
+git_release_enable = false
+
 [changelog]
 protect_breaking_commits = true
