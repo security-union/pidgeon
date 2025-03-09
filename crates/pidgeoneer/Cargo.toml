@@ -6,6 +6,8 @@ repository = "https://github.com/security-union/pidgeon"
 keywords = ["pid", "control", "controller", "robotics", "automation"]
 categories = ["science", "embedded", "algorithms", "robotics"]
 readme = "README.md"
+license = "MIT OR Apache-2.0"
+description = "A web-based dashboard for Pidgeon, a PID controller library for Rust."
 
 [lib]
 crate-type = ["cdylib", "rlib"]
