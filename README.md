@@ -34,7 +34,8 @@ Because while Google has advanced AI systems that can recognize cats in YouTube 
 cargo run --example drone_altitude_control
 ```
 <p align="center">
-    <video src="https://github.com/security-union/pidgeon/assets/drone_altitude_simulation.mov"  width="600"></video>
+    <video src="https://github.com/user-attachments/assets/ba0cf3f6-d61b-4323-bed1-c9be2dbeb851
+"  width="600"></video>
 </p>
 
 ```rust
