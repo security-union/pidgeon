@@ -726,7 +726,7 @@ impl ThreadSafePidController {
     #[cfg(feature = "debugging")]
     pub fn with_debugging(self, debug_config: DebugConfig) -> Result<Self, PidError> {
         // First get a lock on the controller
-        let mut lock = self
+        let lock = self
             .controller
             .lock()
             .map_err(|_| PidError::MutexPoisoned)?;

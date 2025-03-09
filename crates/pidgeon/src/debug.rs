@@ -10,10 +10,8 @@ use std::fs::OpenOptions;
 #[cfg(feature = "debugging")]
 use std::io::Write;
 use std::str::FromStr;
-use std::sync::atomic::AtomicU64;
 #[cfg(feature = "debugging")]
 use std::sync::mpsc::{channel, Sender};
-use std::sync::Arc;
 #[cfg(feature = "debugging")]
 use std::thread;
 #[cfg(feature = "debugging")]
