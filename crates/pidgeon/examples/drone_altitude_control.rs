@@ -64,7 +64,7 @@ fn main() {
 
     // Initial conditions
     let mut altitude = 0.0; // Starting on the ground
-    let mut velocity = 0.0; // Initial vertical velocity
+    let mut velocity: f64 = 0.0; // Initial vertical velocity
     let mut thrust = 0.0; // Initial thrust
     let mut commanded_thrust = 0.0; // Commanded thrust from PID
 
@@ -140,7 +140,7 @@ fn main() {
 
         // Calculate acceleration (F = ma)
         let weight_force = drone_mass * gravity;
-        let drag_force = drag_coefficient * (velocity as f64).abs() * velocity; // Quadratic drag
+        let drag_force = drag_coefficient * velocity.abs() * velocity; // Quadratic drag
         let net_force = thrust - weight_force - drag_force;
         let acceleration = net_force / drone_mass;
 
@@ -214,11 +214,7 @@ fn main() {
 
             // Calculate time window for display - we'll show TIME_WINDOW seconds of data
             let window_points = (TIME_WINDOW * CONTROL_RATE_HZ) as usize;
-            let window_start = if time_step > window_points {
-                time_step - window_points
-            } else {
-                0
-            };
+            let window_start = time_step.saturating_sub(window_points);
 
             let visible_time_window =
                 (time_history[time_step] - time_history[window_start]).max(0.1);
@@ -422,10 +418,11 @@ fn plot_multi_charts(
 
                     // Draw vertical marker
                     for y in chart_y_offset + 1..chart_y_offset + chart_height - 5 {
-                        if y < total_height && x < total_width {
-                            if buffer[y][x] == ' ' || buffer[y][x] == '·' {
-                                buffer[y][x] = '!';
-                            }
+                        if y < total_height
+                            && x < total_width
+                            && (buffer[y][x] == ' ' || buffer[y][x] == '·')
+                        {
+                            buffer[y][x] = '!';
                         }
                     }
                 }
@@ -434,7 +431,7 @@ fn plot_multi_charts(
     }
 
     // Print the entire buffer with colors
-    for y in 0..total_height {
+    for (y, _) in buffer.iter().enumerate().take(total_height) {
         for x in 0..total_width {
             let chart_width = total_width / 2;
             let chart_height = total_height / 2;
@@ -446,10 +443,7 @@ fn plot_multi_charts(
             let is_in_bottom_right = y >= chart_height && x >= chart_width;
 
             // Check if this is in a title box region (top portion of each chart)
-            let is_in_title_region = (is_in_top_left && y < 5)
-                || (is_in_top_right && y < 5)
-                || (is_in_bottom_left && y >= chart_height && y < chart_height + 5)
-                || (is_in_bottom_right && y >= chart_height && y < chart_height + 5);
+            let is_in_title_region = (is_in_top_right || is_in_top_left) && y < 5;
 
             match buffer[y][x] {
                 '●' => print!("\x1B[33m●\x1B[0m"),   // Yellow for Altitude
@@ -501,7 +495,7 @@ fn plot_multi_charts(
 
 /// Draw a single chart for one metric
 fn draw_single_chart(
-    buffer: &mut Vec<Vec<char>>,
+    buffer: &mut [Vec<char>],
     time_data: &[f64],
     value_data: &[f64],
     time_min: f64,
@@ -573,10 +567,12 @@ fn draw_single_chart(
         let ref_y = y_offset + plot_height
             - ((ref_value - value_min) / (value_max - value_min) * plot_height as f64) as usize;
         for x in (x_offset + y_axis_offset)..(x_offset + y_axis_offset + plot_width) {
-            if ref_y < buffer.len() && x < buffer[0].len() && ref_y > y_offset {
-                if buffer[ref_y][x] == ' ' {
-                    buffer[ref_y][x] = '·';
-                }
+            if ref_y < buffer.len()
+                && x < buffer[0].len()
+                && ref_y > y_offset
+                && buffer[ref_y][x] == ' '
+            {
+                buffer[ref_y][x] = '·';
             }
         }
     }
@@ -637,10 +633,8 @@ fn draw_single_chart(
     for y in (y_offset + 1)..(y_offset + plot_height) {
         if y % 5 == 0 {
             for x in (x_offset + y_axis_offset)..(x_offset + y_axis_offset + plot_width) {
-                if y < buffer.len() && x < buffer[0].len() {
-                    if buffer[y][x] == ' ' {
-                        buffer[y][x] = '·';
-                    }
+                if y < buffer.len() && x < buffer[0].len() && buffer[y][x] == ' ' {
+                    buffer[y][x] = '·';
                 }
             }
         }
@@ -677,14 +671,7 @@ fn draw_single_chart(
 }
 
 /// Draw a line between two points using Bresenham's line algorithm
-fn draw_line(
-    plot: &mut Vec<Vec<char>>,
-    x0: usize,
-    y0: usize,
-    x1: usize,
-    y1: usize,
-    line_char: char,
-) {
+fn draw_line(plot: &mut [Vec<char>], x0: usize, y0: usize, x1: usize, y1: usize, line_char: char) {
     let mut x0 = x0 as isize;
     let mut y0 = y0 as isize;
     let x1 = x1 as isize;
@@ -731,7 +718,7 @@ fn draw_line(
 
 /// Draw a title box with decorative border
 fn draw_title_box(
-    buffer: &mut Vec<Vec<char>>,
+    buffer: &mut [Vec<char>],
     title: &str,
     x_offset: usize,
     y_offset: usize,
