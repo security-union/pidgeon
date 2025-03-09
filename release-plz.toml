@@ -13,7 +13,6 @@ git_release_enable = true  # enable release creation on Github/Gitlab
 [[package]]
 name = "pidgeon"
 publish = true
-path = "crates/pidgeon"
 changelog_update = true
 git-release-enable = true
 
