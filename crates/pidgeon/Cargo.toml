@@ -36,6 +36,10 @@ name = "debug_temperature_control"
 path = "examples/debug_temperature_control.rs"
 required-features = ["debugging"]
 
+[[example]]
+name = "drone_altitude_control"
+path = "examples/drone_altitude_control.rs"
+
 [[bench]]
 name = "pid_benchmark"
 harness = false
