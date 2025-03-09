@@ -803,52 +803,97 @@ mod tests {
 
     #[test]
     fn test_anti_windup() {
-        // Setup controller
-        let config = ControllerConfig::new()
-            .with_kp(1.0)
-            .with_ki(1.0)
+        println!("\n--- Testing Anti-Windup Effect ---");
+
+        // Create two controllers - one with anti-windup and one without
+        let config_with_aw = ControllerConfig::new()
+            .with_kp(0.5)
+            .with_ki(0.5)
             .with_kd(0.0)
-            .with_output_limits(-1.0, 1.0) // Intentionally restrictive
-            .with_setpoint(10.0); // Target value
+            .with_setpoint(10.0)
+            .with_output_limits(-1.0, 1.0) // Restrictive limits to cause saturation
+            .with_anti_windup(true); // Enable anti-windup
 
-        // Test with anti-windup ON
-        let mut controller_with_aw = PidController::new(config.clone().with_anti_windup(true));
+        let config_without_aw = ControllerConfig::new()
+            .with_kp(0.5)
+            .with_ki(0.5)
+            .with_kd(0.0)
+            .with_setpoint(10.0)
+            .with_output_limits(-1.0, 1.0) // Same restrictive limits
+            .with_anti_windup(false); // Disable anti-windup
 
-        // Test with anti-windup OFF
-        let mut controller_without_aw = PidController::new(config.with_anti_windup(false));
+        let mut controller_with_aw = PidController::new(config_with_aw);
+        let mut controller_without_aw = PidController::new(config_without_aw);
 
-        // Process value starts far from setpoint to trigger saturation
-        let mut value_with_aw = 0.0;
-        let mut value_without_aw = 0.0;
+        // Skip first run to initialize both controllers
+        controller_with_aw.compute(0.0, 0.1);
+        controller_without_aw.compute(0.0, 0.1);
+
+        // Run both controllers with large error to cause saturation
+        // Process value of 0.0 will give error = 10.0 - 0.0 = 10.0
         let dt = 0.1;
+        let process_value = 0.0;
 
-        // Run both controllers for several iterations with saturation
-        for _ in 0..50 {
-            // The error is 10.0 - 0.0 = 10.0, which should saturate the output
-            let output_with_aw = controller_with_aw.compute(value_with_aw, dt);
-            let output_without_aw = controller_without_aw.compute(value_without_aw, dt);
+        println!("Running controllers with large error (10.0) for 20 iterations");
 
-            // Both should be saturated at 1.0
-            assert_eq!(output_with_aw, 1.0);
-            assert_eq!(output_without_aw, 1.0);
+        // Run for multiple iterations to accumulate integral term
+        for i in 0..20 {
+            let out_with_aw = controller_with_aw.compute(process_value, dt);
+            let out_without_aw = controller_without_aw.compute(process_value, dt);
 
-            // Process values increase by small amount (to keep them in saturation range)
-            value_with_aw += 0.01;
-            value_without_aw += 0.01;
+            // Both should quickly saturate at the maximum output
+            if i > 2 {
+                assert_eq!(
+                    out_with_aw, 1.0,
+                    "Controller with anti-windup should saturate"
+                );
+                assert_eq!(
+                    out_without_aw, 1.0,
+                    "Controller without anti-windup should saturate"
+                );
+            }
+
+            if i % 5 == 0 {
+                println!(
+                    "Iteration {}: With AW = {:.4}, Without AW = {:.4}",
+                    i, out_with_aw, out_without_aw
+                );
+            }
         }
 
-        // Now set both process values to 9.5 (close to setpoint)
-        // With anti-windup, controller should recover faster
-        value_with_aw = 9.5;
-        value_without_aw = 9.5;
+        // After saturation period, the controller with anti-windup should have
+        // a smaller integral term than the one without anti-windup
+        let integral_with_aw = controller_with_aw.integral;
+        let integral_without_aw = controller_without_aw.integral;
 
-        // Run for one step to see response
-        let output_with_aw = controller_with_aw.compute(value_with_aw, dt);
-        let output_without_aw = controller_without_aw.compute(value_without_aw, dt);
+        println!("Integral term after saturation:");
+        println!("  With anti-windup: {:.4}", integral_with_aw);
+        println!("  Without anti-windup: {:.4}", integral_without_aw);
 
-        // With anti-windup, integral term should have been limited
-        // So output should be smaller than without anti-windup
-        assert!(output_with_aw < output_without_aw);
+        // The key test: anti-windup should limit integral growth during saturation
+        assert!(
+            integral_with_aw < integral_without_aw,
+            "Anti-windup should limit integral term during saturation"
+        );
+
+        // Now test recovery: suddenly change process value to be very close to setpoint
+        // and see how controllers respond
+        println!("\nTesting recovery by setting process value to 9.5");
+        let recovery_value = 9.5; // Close to setpoint of 10.0
+
+        let recovery_with_aw = controller_with_aw.compute(recovery_value, dt);
+        let recovery_without_aw = controller_without_aw.compute(recovery_value, dt);
+
+        println!("Recovery outputs:");
+        println!("  With anti-windup: {:.4}", recovery_with_aw);
+        println!("  Without anti-windup: {:.4}", recovery_without_aw);
+
+        // The controller without anti-windup should have a larger output due to
+        // the accumulated integral term
+        assert!(
+            recovery_with_aw < recovery_without_aw,
+            "Controller with anti-windup should recover faster"
+        );
     }
 
     #[test]
@@ -859,39 +904,44 @@ mod tests {
             .with_ki(0.0)
             .with_kd(0.0)
             .with_deadband(5.0)
+            .with_setpoint(0.0) // With setpoint=0, process_value directly maps to -error
             .with_output_limits(-100.0, 100.0);
 
         let mut controller = PidController::new(config);
 
-        // Test 1: Error within deadband should result in zero output
-        let small_error = 3.0; // < deadband of 5.0
-        let output1 = controller.compute(small_error, 0.1);
+        // Test 1: Process value creating error within deadband should result in zero output
+        // Process = -3.0 -> Error = 0.0 - (-3.0) = 3.0 -> Within deadband
+        let process_small_error = -3.0;
+        let output1 = controller.compute(process_small_error, 0.1);
         assert_eq!(
             output1, 0.0,
             "Error within deadband should produce zero output"
         );
 
-        // Test with negative error within deadband
-        let small_negative_error = -4.0; // > -deadband of -5.0
-        let output2 = controller.compute(small_negative_error, 0.1);
+        // Test with process value creating negative error within deadband
+        // Process = 4.0 -> Error = 0.0 - 4.0 = -4.0 -> Within deadband
+        let process_small_negative_error = 4.0;
+        let output2 = controller.compute(process_small_negative_error, 0.1);
         assert_eq!(
             output2, 0.0,
             "Negative error within deadband should produce zero output"
         );
 
-        // Test 2: Error outside deadband should be reduced by deadband value
-        let large_error = 15.0; // > deadband of 5.0
-                                // With Kp=1.0, output should be (error - deadband) * Kp = (15 - 5) * 1 = 10
-        let output3 = controller.compute(large_error, 0.1);
+        // Test 2: Process value creating error outside deadband should be affected by deadband
+        // Process = -15.0 -> Error = 0.0 - (-15.0) = 15.0 -> Outside deadband
+        // With Kp=1.0, output should be (error - deadband) * Kp = (15 - 5) * 1 = 10
+        let process_large_error = -15.0;
+        let output3 = controller.compute(process_large_error, 0.1);
         assert_eq!(
             output3, 10.0,
             "Error outside deadband should be reduced by deadband"
         );
 
-        // Test with negative error outside deadband
-        let large_negative_error = -25.0; // < -deadband of -5.0
-                                          // With Kp=1.0, output should be (error + deadband) * Kp = (-25 + 5) * 1 = -20
-        let output4 = controller.compute(large_negative_error, 0.1);
+        // Test with process value creating negative error outside deadband
+        // Process = 25.0 -> Error = 0.0 - 25.0 = -25.0 -> Outside deadband
+        // With Kp=1.0, output should be (error + deadband) * Kp = (-25 + 5) * 1 = -20
+        let process_large_negative_error = 25.0;
+        let output4 = controller.compute(process_large_negative_error, 0.1);
         assert_eq!(
             output4, -20.0,
             "Negative error outside deadband should be reduced by deadband"
@@ -900,8 +950,10 @@ mod tests {
         // Test 3: Dynamically changing deadband
         controller.set_deadband(10.0).unwrap();
 
-        // Now the error of 15.0 should result in output of (15 - 10) * 1 = 5
-        let output5 = controller.compute(15.0, 0.1);
+        // Now compute with the same process value but with updated deadband
+        // Process = -15.0 -> Error = 0.0 - (-15.0) = 15.0 -> Outside deadband
+        // With new deadband=10.0: (15 - 10) * 1 = 5
+        let output5 = controller.compute(-15.0, 0.1);
         assert_eq!(output5, 5.0, "Output should reflect updated deadband value");
 
         // Test 4: Invalid deadband values
@@ -988,7 +1040,7 @@ mod tests {
             .with_kp(-2.0) // Negative proportional gain
             .with_ki(0.0) // No integral gain for simplicity
             .with_kd(0.0) // No derivative gain for simplicity
-            .with_setpoint(0.0)
+            .with_setpoint(0.0) // Setpoint of 0.0 means error = 0.0 - process_value
             .with_output_limits(-100.0, 100.0); // Ensure we don't hit limits
 
         let mut controller = PidController::new(config);
@@ -997,28 +1049,28 @@ mod tests {
         let init_output = controller.compute(0.0, 0.1);
         assert_eq!(init_output, 0.0, "First run should return 0.0");
 
-        // Test with positive error should give negative output with Kp = -2.0
-        let positive_error = 5.0;
-        let output_for_positive = controller.compute(positive_error, 0.1);
-        // Expected: Kp * error = -2.0 * 5.0 = -10.0
+        // For process_value = -5.0, error = 0.0 - (-5.0) = 5.0
+        // With Kp = -2.0, that gives output = -2.0 * 5.0 = -10.0
+        let process_value_negative = -5.0;
+        let output_for_negative_process = controller.compute(process_value_negative, 0.1);
         assert_eq!(
-            output_for_positive, -10.0,
-            "With Kp=-2.0, error=5.0 should give output=-10.0, got {}",
-            output_for_positive
+            output_for_negative_process, -10.0,
+            "With Kp=-2.0, setpoint=0.0, process_value=-5.0 should give output=-10.0, got {}",
+            output_for_negative_process
         );
 
         // Reset controller for clean test
         controller.reset();
         let _ = controller.compute(0.0, 0.1); // Skip first run
 
-        // Test with negative error should give positive output with Kp = -2.0
-        let negative_error = -5.0;
-        let output_for_negative = controller.compute(negative_error, 0.1);
-        // Expected: Kp * error = -2.0 * (-5.0) = 10.0
+        // For process_value = 5.0, error = 0.0 - 5.0 = -5.0
+        // With Kp = -2.0, that gives output = -2.0 * (-5.0) = 10.0
+        let process_value_positive = 5.0;
+        let output_for_positive_process = controller.compute(process_value_positive, 0.1);
         assert_eq!(
-            output_for_negative, 10.0,
-            "With Kp=-2.0, error=-5.0 should give output=10.0, got {}",
-            output_for_negative
+            output_for_positive_process, 10.0,
+            "With Kp=-2.0, setpoint=0.0, process_value=5.0 should give output=10.0, got {}",
+            output_for_positive_process
         );
     }
 
@@ -1034,57 +1086,73 @@ mod tests {
             .with_anti_windup(true);
 
         let mut controller = PidController::new(config);
-        
+
         // Initial conditions
         let mut value = 0.0;
         let dt = 0.05;
-        
-        println!("Testing controller precision with default settled_threshold: {}", controller.settled_threshold);
-        
+
+        println!(
+            "Testing controller precision with default settled_threshold: {}",
+            controller.settled_threshold
+        );
+
         // Run 200 iterations (10 seconds) without disturbances
         for i in 0..200 {
             let control_signal = controller.compute(value, dt);
-            
+
             // Simple plant model (similar to drone without gravity/wind)
             value += control_signal * dt * 0.01;
-            
+
             // Print every 20 iterations
             if i % 20 == 0 {
-                println!("Iteration {}: Value = {:.6}, Error = {:.6}, Control = {:.6}", 
-                         i, value, 10.0 - value, control_signal);
+                println!(
+                    "Iteration {}: Value = {:.6}, Error = {:.6}, Control = {:.6}",
+                    i,
+                    value,
+                    10.0 - value,
+                    control_signal
+                );
             }
         }
-        
+
         // Check final value - how close to setpoint?
         let final_error = (10.0 - value).abs();
         println!("Final value: {:.6}, Error: {:.6}", value, final_error);
-        
+
         // Now let's check if it's related to settled_threshold
         println!("\nResetting and using smaller settled_threshold...");
         controller.reset();
         controller.set_settled_threshold(0.001);
         value = 0.0;
-        
+
         // Run again with smaller settled_threshold
         for i in 0..200 {
             let control_signal = controller.compute(value, dt);
             value += control_signal * dt * 0.01;
-            
+
             if i % 20 == 0 {
-                println!("Iteration {}: Value = {:.6}, Error = {:.6}, Control = {:.6}", 
-                         i, value, 10.0 - value, control_signal);
+                println!(
+                    "Iteration {}: Value = {:.6}, Error = {:.6}, Control = {:.6}",
+                    i,
+                    value,
+                    10.0 - value,
+                    control_signal
+                );
             }
         }
-        
+
         // Check final value again
         let final_error_2 = (10.0 - value).abs();
-        println!("Final value with smaller threshold: {:.6}, Error: {:.6}", value, final_error_2);
+        println!(
+            "Final value with smaller threshold: {:.6}, Error: {:.6}",
+            value, final_error_2
+        );
     }
-    
+
     #[test]
     fn test_deadband_effect() {
         println!("\n--- Testing Deadband Effect ---");
-        
+
         // Create controller with zero deadband
         let config = ControllerConfig::new()
             .with_kp(10.0)
@@ -1093,30 +1161,38 @@ mod tests {
             .with_output_limits(0.0, 100.0)
             .with_setpoint(10.0)
             .with_deadband(0.0); // Zero deadband
-            
+
         let mut controller = PidController::new(config);
-        
+
         // Initial state
         let mut value = 9.95; // Start very close to setpoint
         let dt = 0.05;
-        
+
         println!("Starting with process value: {:.6}", value);
-        
+
         // Run 100 iterations with zero deadband
         for i in 0..100 {
             let control_signal = controller.compute(value, dt);
             value += control_signal * dt * 0.01;
-            
+
             if i % 10 == 0 || i > 90 {
-                println!("Iteration {}: Value = {:.6}, Error = {:.6}, Integral = {:.6}", 
-                         i, value, 10.0 - value, controller.integral);
+                println!(
+                    "Iteration {}: Value = {:.6}, Error = {:.6}, Integral = {:.6}",
+                    i,
+                    value,
+                    10.0 - value,
+                    controller.integral
+                );
             }
         }
-        
+
         // Final value with zero deadband
         let final_value_no_deadband = value;
-        println!("Final value with zero deadband: {:.6}", final_value_no_deadband);
-        
+        println!(
+            "Final value with zero deadband: {:.6}",
+            final_value_no_deadband
+        );
+
         // Now test with small deadband
         let config = ControllerConfig::new()
             .with_kp(10.0)
@@ -1125,19 +1201,22 @@ mod tests {
             .with_output_limits(0.0, 100.0)
             .with_setpoint(10.0)
             .with_deadband(0.05); // 0.05 deadband
-            
+
         let mut controller = PidController::new(config);
-        
+
         // Reset simulation
         value = 9.95;
-        
-        println!("\nStarting with process value: {:.6} and deadband: 0.05", value);
-        
+
+        println!(
+            "\nStarting with process value: {:.6} and deadband: 0.05",
+            value
+        );
+
         // Run 100 iterations with deadband
         for i in 0..100 {
             let control_signal = controller.compute(value, dt);
             value += control_signal * dt * 0.01;
-            
+
             if i % 10 == 0 || i > 90 {
                 // Get the raw error and the working error after deadband
                 let error = 10.0 - value;
@@ -1146,27 +1225,35 @@ mod tests {
                 } else {
                     error - 0.05 * error.signum()
                 };
-                
-                println!("Iteration {}: Value = {:.6}, Raw Error = {:.6}, Working Error = {:.6}", 
-                         i, value, error, working_error);
+
+                println!(
+                    "Iteration {}: Value = {:.6}, Raw Error = {:.6}, Working Error = {:.6}",
+                    i, value, error, working_error
+                );
             }
         }
-        
+
         // Final value with deadband
         let final_value_with_deadband = value;
-        println!("Final value with 0.05 deadband: {:.6}", final_value_with_deadband);
-        
+        println!(
+            "Final value with 0.05 deadband: {:.6}",
+            final_value_with_deadband
+        );
+
         // Compare results
         println!("\nComparing results:");
         println!("Without deadband: {:.6}", final_value_no_deadband);
         println!("With 0.05 deadband: {:.6}", final_value_with_deadband);
-        println!("Difference: {:.6}", (final_value_no_deadband - final_value_with_deadband).abs());
+        println!(
+            "Difference: {:.6}",
+            (final_value_no_deadband - final_value_with_deadband).abs()
+        );
     }
-    
+
     #[test]
     fn test_anti_windup_effect_on_precision() {
         println!("\n--- Testing Anti-Windup Effect on Precision ---");
-        
+
         // Controller with anti-windup enabled
         let config_with_aw = ControllerConfig::new()
             .with_kp(10.0)
@@ -1176,7 +1263,7 @@ mod tests {
             .with_setpoint(10.0)
             .with_deadband(0.0)
             .with_anti_windup(true);
-            
+
         // Controller with anti-windup disabled
         let config_without_aw = ControllerConfig::new()
             .with_kp(10.0)
@@ -1186,43 +1273,53 @@ mod tests {
             .with_setpoint(10.0)
             .with_deadband(0.0)
             .with_anti_windup(false);
-            
+
         let mut controller_with_aw = PidController::new(config_with_aw);
         let mut controller_without_aw = PidController::new(config_without_aw);
-        
+
         // Initial state
         let mut value_with_aw = 0.0;
         let mut value_without_aw = 0.0;
         let dt = 0.05;
-        
+
         // Run 200 iterations (10 seconds)
         for i in 0..200 {
             let control_with_aw = controller_with_aw.compute(value_with_aw, dt);
             let control_without_aw = controller_without_aw.compute(value_without_aw, dt);
-            
+
             // Update process values
             value_with_aw += control_with_aw * dt * 0.01;
             value_without_aw += control_without_aw * dt * 0.01;
-            
+
             if i % 20 == 0 {
-                println!("Iteration {}: With AW = {:.6}, Without AW = {:.6}, Diff = {:.6}", 
-                         i, value_with_aw, value_without_aw, 
-                         (value_with_aw - value_without_aw).abs());
+                println!(
+                    "Iteration {}: With AW = {:.6}, Without AW = {:.6}, Diff = {:.6}",
+                    i,
+                    value_with_aw,
+                    value_without_aw,
+                    (value_with_aw - value_without_aw).abs()
+                );
             }
         }
-        
+
         // Compare final results
         println!("\nFinal values after 200 iterations:");
-        println!("With anti-windup: {:.6}, Error = {:.6}", 
-                 value_with_aw, (10.0 - value_with_aw).abs());
-        println!("Without anti-windup: {:.6}, Error = {:.6}", 
-                 value_without_aw, (10.0 - value_without_aw).abs());
+        println!(
+            "With anti-windup: {:.6}, Error = {:.6}",
+            value_with_aw,
+            (10.0 - value_with_aw).abs()
+        );
+        println!(
+            "Without anti-windup: {:.6}, Error = {:.6}",
+            value_without_aw,
+            (10.0 - value_without_aw).abs()
+        );
     }
-    
+
     #[test]
     fn test_gravity_compensation() {
         println!("\n--- Testing Gravity Effect on Steady-State ---");
-        
+
         // Create controller with typical drone parameters
         let config = ControllerConfig::new()
             .with_kp(10.0)
@@ -1231,9 +1328,9 @@ mod tests {
             .with_output_limits(0.0, 100.0)
             .with_setpoint(10.0)
             .with_deadband(0.0);
-            
+
         let mut controller = PidController::new(config);
-        
+
         // Simulation parameters - similar to drone example
         let mut altitude = 0.0;
         let mut velocity = 0.0;
@@ -1241,53 +1338,62 @@ mod tests {
         let drone_mass = 1.2; // kg
         let gravity = 9.81; // m/s²
         let max_thrust = 30.0; // Newtons
-        
+
         // Run simulation with gravity
         println!("Running drone simulation with gravity");
         for i in 0..200 {
             // Get control signal (0-100%)
             let control_signal_percent = controller.compute(altitude, dt);
-            
+
             // Convert to thrust in Newtons
             let thrust = control_signal_percent * max_thrust / 100.0;
-            
+
             // Calculate net force with gravity
             let net_force = thrust - (drone_mass * gravity);
-            
+
             // Calculate acceleration
             let acceleration = net_force / drone_mass;
-            
+
             // Update velocity and position
             velocity += acceleration * dt;
             altitude += velocity * dt;
-            
+
             if i % 20 == 0 {
                 let hover_thrust_pct = gravity * drone_mass * 100.0 / max_thrust;
-                println!("Iteration {}: Alt = {:.4}, Vel = {:.4}, Thrust% = {:.2}, Hover% = {:.2}", 
-                         i, altitude, velocity, control_signal_percent, hover_thrust_pct);
+                println!(
+                    "Iteration {}: Alt = {:.4}, Vel = {:.4}, Thrust% = {:.2}, Hover% = {:.2}",
+                    i, altitude, velocity, control_signal_percent, hover_thrust_pct
+                );
             }
         }
-        
+
         // Final position
-        println!("\nFinal altitude: {:.6}, Error: {:.6}", altitude, (10.0 - altitude).abs());
-        println!("Exact hover thrust percentage: {:.6}%", gravity * drone_mass * 100.0 / max_thrust);
+        println!(
+            "\nFinal altitude: {:.6}, Error: {:.6}",
+            altitude,
+            (10.0 - altitude).abs()
+        );
+        println!(
+            "Exact hover thrust percentage: {:.6}%",
+            gravity * drone_mass * 100.0 / max_thrust
+        );
     }
 
     #[test]
     fn test_close_to_setpoint_behavior() {
         println!("\n--- Testing Behavior Near Setpoint ---");
-        
+
         // Create a controller with zero deadband to isolate just the physics effects
         let config = ControllerConfig::new()
-            .with_kp(10.0) 
-            .with_ki(2.0)  
-            .with_kd(0.0)  // No derivative term to simplify analysis
+            .with_kp(10.0)
+            .with_ki(2.0)
+            .with_kd(0.0) // No derivative term to simplify analysis
             .with_output_limits(0.0, 100.0)
             .with_setpoint(10.0)
             .with_deadband(0.0);
-            
+
         let mut controller = PidController::new(config);
-        
+
         // Simulate with physics similar to the drone example
         let mut altitude = 9.95; // Start very close to setpoint but just below
         let mut velocity = 0.0;
@@ -1295,102 +1401,106 @@ mod tests {
         let drone_mass = 1.2; // kg
         let gravity = 9.81; // m/s²
         let max_thrust = 30.0; // Newtons
-        
+
         // Calculate exact hover thrust
         let hover_thrust_pct = gravity * drone_mass * 100.0 / max_thrust;
-        
+
         println!("Starting conditions:");
         println!("Altitude: 9.95 meters (error = 0.05)");
         println!("Velocity: 0.0 m/s");
         println!("Exact hover thrust: {:.4}%", hover_thrust_pct);
-        
+
         println!("\nStep | Altitude | Error | Control | P Term | I Term | Net Force | Accel");
         println!("-----|----------|-------|---------|--------|--------|-----------|------");
-        
+
         // Run a short simulation to observe the behavior
         // We'll track the integral term and P term separately
         for i in 0..50 {
             // Get raw error for diagnostics
             let error = 10.0 - altitude;
-            
+
             // Compute control signal and output components
             controller.integral = 0.0; // Reset integral term to isolate P component
             let p_only = controller.compute(altitude, dt);
-            
+
             // Reset and compute with P+I
             controller.integral = error * i as f64 * dt; // Simulate accumulated integral term
             let control_signal = controller.compute(altitude, dt);
             let i_term = control_signal - p_only;
-            
+
             // Get actual thrust
             let thrust = control_signal * max_thrust / 100.0;
-            
+
             // Calculate forces
             let weight_force = drone_mass * gravity;
             let net_force = thrust - weight_force; // Simplified physics (no drag)
             let acceleration = net_force / drone_mass;
-            
+
             // Print the step details
             if i % 5 == 0 || i < 5 {
-                println!("{:4} | {:8.5} | {:5.5} | {:7.4} | {:6.4} | {:6.4} | {:9.5} | {:6.4}", 
-                         i, altitude, error, control_signal, p_only, i_term, net_force, acceleration);
+                println!(
+                    "{:4} | {:8.5} | {:5.5} | {:7.4} | {:6.4} | {:6.4} | {:9.5} | {:6.4}",
+                    i, altitude, error, control_signal, p_only, i_term, net_force, acceleration
+                );
             }
-            
+
             // Update state for next iteration
             velocity += acceleration * dt;
             altitude += velocity * dt;
         }
-        
+
         // Now run a more complete simulation with proper integral term accumulation
         println!("\nRunning full simulation with integral term accumulation:");
-        
+
         // Reset with a new config
         let config2 = ControllerConfig::new()
-            .with_kp(10.0) 
-            .with_ki(2.0)  
-            .with_kd(0.0)  
+            .with_kp(10.0)
+            .with_ki(2.0)
+            .with_kd(0.0)
             .with_output_limits(0.0, 100.0)
             .with_setpoint(10.0)
             .with_deadband(0.0);
-            
+
         controller = PidController::new(config2);
         altitude = 9.95;
         velocity = 0.0;
-        
+
         println!("\nStep | Altitude | Error | Control | Integral | P Term | I Term");
         println!("-----|----------|-------|---------|----------|--------|-------");
-        
+
         for i in 0..100 {
             // Compute control signal
             let error_before = 10.0 - altitude;
             let control_signal = controller.compute(altitude, dt);
-            
+
             // Convert to thrust and calculate physics
             let thrust = control_signal * max_thrust / 100.0;
             let weight_force = drone_mass * gravity;
             let net_force = thrust - weight_force;
             let acceleration = net_force / drone_mass;
-            
+
             // Print diagnostics
             if i % 10 == 0 || i < 5 || i > 95 {
                 let p_term = 10.0 * error_before; // Kp * error
                 let i_term = 2.0 * controller.integral; // Ki * integral
-                
-                println!("{:4} | {:8.5} | {:5.5} | {:7.4} | {:8.5} | {:6.4} | {:6.4}",
-                         i, altitude, error_before, control_signal, controller.integral, p_term, i_term);
+
+                println!(
+                    "{:4} | {:8.5} | {:5.5} | {:7.4} | {:8.5} | {:6.4} | {:6.4}",
+                    i, altitude, error_before, control_signal, controller.integral, p_term, i_term
+                );
             }
-            
+
             // Update state for next iteration
             velocity += acceleration * dt;
             altitude += velocity * dt;
         }
-        
+
         println!("\nFinal altitude: {:.6}", altitude);
         println!("Difference from setpoint: {:.6}", (10.0 - altitude).abs());
-        
+
         // Now run with various integral gain values
         println!("\nTesting different integral gains (Ki):");
-        
+
         for ki in [0.5, 1.0, 2.0, 4.0, 8.0].iter() {
             let config = ControllerConfig::new()
                 .with_kp(10.0)
@@ -1399,11 +1509,11 @@ mod tests {
                 .with_output_limits(0.0, 100.0)
                 .with_setpoint(10.0)
                 .with_deadband(0.0);
-                
+
             let mut controller = PidController::new(config);
             let mut altitude = 9.95;
             let mut velocity = 0.0;
-            
+
             // Run simulation for 200 steps
             for _ in 0..200 {
                 let control_signal = controller.compute(altitude, dt);
@@ -1411,20 +1521,24 @@ mod tests {
                 let weight_force = drone_mass * gravity;
                 let net_force = thrust - weight_force;
                 let acceleration = net_force / drone_mass;
-                
+
                 velocity += acceleration * dt;
                 altitude += velocity * dt;
             }
-            
-            println!("Ki = {:.1}: Final altitude = {:.6}, Error = {:.6}", 
-                     ki, altitude, (10.0 - altitude).abs());
+
+            println!(
+                "Ki = {:.1}: Final altitude = {:.6}, Error = {:.6}",
+                ki,
+                altitude,
+                (10.0 - altitude).abs()
+            );
         }
     }
 
     #[test]
     fn test_drone_simulation_converging_point() {
         println!("\n--- Testing Drone Simulation Convergence ---");
-        
+
         // Create controller identical to the drone simulation
         let config = ControllerConfig::new()
             .with_kp(10.0)
@@ -1433,9 +1547,9 @@ mod tests {
             .with_output_limits(0.0, 100.0)
             .with_setpoint(10.0)
             .with_deadband(0.0);
-            
+
         let mut controller = PidController::new(config);
-        
+
         // Drone parameters (matching the example)
         let mut altitude = 0.0;
         let mut velocity = 0.0;
@@ -1445,67 +1559,78 @@ mod tests {
         let max_thrust = 30.0;
         let motor_response_delay = 0.1;
         let drag_coefficient = 0.3;
-        
+
         // Additional variables matching the drone example
         let mut commanded_thrust = 0.0;
         let mut thrust;
-        
+
         println!("Running simulation with full physics model:");
-        
+
         // Headers
         println!("Step | Altitude | Error | Control | Actual Thrust | Net Force | Velocity");
         println!("-----|----------|-------|---------|--------------|-----------|----------");
-        
+
         // Our goal is to see at what altitude the system stabilizes
-        for i in 0..1200 { // 60 seconds of simulation (at 20Hz)
+        for i in 0..1200 {
+            // 60 seconds of simulation (at 20Hz)
             if i % 200 == 0 {
                 println!("--- {:1} seconds of simulation ---", i / 20);
             }
-            
+
             // Get control signal
             let control_signal = controller.compute(altitude, dt);
-            
+
             // Apply motor response delay
-            commanded_thrust = commanded_thrust + 
-                (control_signal - commanded_thrust) * dt / motor_response_delay;
-            
+            commanded_thrust =
+                commanded_thrust + (control_signal - commanded_thrust) * dt / motor_response_delay;
+
             // Convert to actual thrust
             thrust = commanded_thrust * max_thrust / 100.0;
-            
+
             // Calculate forces
             let weight_force = drone_mass * gravity;
             let drag_force = drag_coefficient * (velocity as f64).abs() * velocity;
             let net_force = thrust - weight_force - drag_force;
             let acceleration = net_force / drone_mass;
-            
+
             // Update state
             velocity += acceleration * dt;
             altitude += velocity * dt;
-            
+
             // Constrain to ground
             if altitude < 0.0 {
                 altitude = 0.0;
                 velocity = 0.0;
             }
-            
+
             // Print every 100 steps (5 seconds) or when near 10m
             if i % 100 == 0 || (altitude > 9.9 && altitude < 10.0 && i % 20 == 0) {
-                println!("{:4} | {:8.5} | {:6.5} | {:7.4} | {:12.6} | {:9.5} | {:8.6}",
-                         i, altitude, 10.0 - altitude, control_signal, thrust, 
-                         net_force, velocity);
+                println!(
+                    "{:4} | {:8.5} | {:6.5} | {:7.4} | {:12.6} | {:9.5} | {:8.6}",
+                    i,
+                    altitude,
+                    10.0 - altitude,
+                    control_signal,
+                    thrust,
+                    net_force,
+                    velocity
+                );
             }
-            
+
             // Check if altitude has reached a stable value (very small velocity)
             if i > 400 && altitude > 9.9 && velocity.abs() < 0.001 {
-                println!("System stabilized at altitude {:.6} meters at step {}", altitude, i);
+                println!(
+                    "System stabilized at altitude {:.6} meters at step {}",
+                    altitude, i
+                );
                 println!("Error from setpoint: {:.6} meters", (10.0 - altitude).abs());
                 break;
             }
         }
-        
+
         // Now let's test with motor response delay disabled
         println!("\nTesting with instant motor response (no delay):");
-        
+
         // Recreate config since previous one was moved
         let config2 = ControllerConfig::new()
             .with_kp(10.0)
@@ -1514,45 +1639,52 @@ mod tests {
             .with_output_limits(0.0, 100.0)
             .with_setpoint(10.0)
             .with_deadband(0.0);
-            
+
         controller = PidController::new(config2);
         altitude = 0.0;
         velocity = 0.0;
-        
+
         for i in 0..1200 {
             let control_signal = controller.compute(altitude, dt);
-            
+
             // Skip motor response delay
             thrust = control_signal * max_thrust / 100.0;
-            
+
             let weight_force = drone_mass * gravity;
             let drag_force = drag_coefficient * (velocity as f64).abs() * velocity;
             let net_force = thrust - weight_force - drag_force;
             let acceleration = net_force / drone_mass;
-            
+
             velocity += acceleration * dt;
             altitude += velocity * dt;
-            
+
             if altitude < 0.0 {
                 altitude = 0.0;
                 velocity = 0.0;
             }
-            
+
             if i % 200 == 0 {
-                println!("Step {:4}: Altitude = {:.6}, Error = {:.6}", 
-                         i, altitude, (10.0 - altitude).abs());
+                println!(
+                    "Step {:4}: Altitude = {:.6}, Error = {:.6}",
+                    i,
+                    altitude,
+                    (10.0 - altitude).abs()
+                );
             }
-            
+
             if i > 400 && altitude > 9.9 && velocity.abs() < 0.001 {
-                println!("System stabilized at altitude {:.6} meters at step {}", altitude, i);
+                println!(
+                    "System stabilized at altitude {:.6} meters at step {}",
+                    altitude, i
+                );
                 println!("Error from setpoint: {:.6} meters", (10.0 - altitude).abs());
                 break;
             }
         }
-        
+
         // Finally, let's test with very high Ki to see if that helps converge exactly to 10.0
         println!("\nTesting with high integral gain (Ki = 10.0):");
-        
+
         let high_ki_config = ControllerConfig::new()
             .with_kp(10.0)
             .with_ki(10.0) // Increased from 2.0 to 10.0
@@ -1560,41 +1692,48 @@ mod tests {
             .with_output_limits(0.0, 100.0)
             .with_setpoint(10.0)
             .with_deadband(0.0);
-            
+
         controller = PidController::new(high_ki_config);
         altitude = 0.0;
         velocity = 0.0;
         commanded_thrust = 0.0;
-        
+
         for i in 0..1200 {
             let control_signal = controller.compute(altitude, dt);
-            
+
             // Apply motor response delay
-            commanded_thrust = commanded_thrust + 
-                (control_signal - commanded_thrust) * dt / motor_response_delay;
-                
+            commanded_thrust =
+                commanded_thrust + (control_signal - commanded_thrust) * dt / motor_response_delay;
+
             thrust = commanded_thrust * max_thrust / 100.0;
-            
+
             let weight_force = drone_mass * gravity;
             let drag_force = drag_coefficient * (velocity as f64).abs() * velocity;
             let net_force = thrust - weight_force - drag_force;
             let acceleration = net_force / drone_mass;
-            
+
             velocity += acceleration * dt;
             altitude += velocity * dt;
-            
+
             if altitude < 0.0 {
                 altitude = 0.0;
                 velocity = 0.0;
             }
-            
+
             if i % 200 == 0 {
-                println!("Step {:4}: Altitude = {:.6}, Error = {:.6}", 
-                         i, altitude, (10.0 - altitude).abs());
+                println!(
+                    "Step {:4}: Altitude = {:.6}, Error = {:.6}",
+                    i,
+                    altitude,
+                    (10.0 - altitude).abs()
+                );
             }
-            
+
             if i > 400 && altitude > 9.9 && velocity.abs() < 0.001 {
-                println!("System stabilized at altitude {:.6} meters at step {}", altitude, i);
+                println!(
+                    "System stabilized at altitude {:.6} meters at step {}",
+                    altitude, i
+                );
                 println!("Error from setpoint: {:.6} meters", (10.0 - altitude).abs());
                 break;
             }

@@ -32,13 +32,13 @@ const MAX_GUST_VELOCITY: f64 = 3.0; // Maximum wind gust velocity (positive = up
 fn main() {
     // Create a PID controller with carefully tuned gains for altitude control
     let config = ControllerConfig::new()
-        .with_kp(10.0)      // Proportional gain - immediate response to altitude error
-        .with_ki(5.0)       // Integral gain - eliminates steady-state error (hovering accuracy)
-        .with_kd(8.0)       // Derivative gain - dampens oscillations (crucial for stability)
-        .with_output_limits(0.0, 100.0)  // Thrust percentage (0-100%)
+        .with_kp(10.0) // Proportional gain - immediate response to altitude error
+        .with_ki(5.0) // Integral gain - eliminates steady-state error (hovering accuracy)
+        .with_kd(8.0) // Derivative gain - dampens oscillations (crucial for stability)
+        .with_output_limits(0.0, 100.0) // Thrust percentage (0-100%)
         .with_setpoint(SETPOINT_ALTITUDE)
-        .with_deadband(0.0)  // Set deadband to zero for exact tracking to setpoint
-        .with_anti_windup(true);  // Prevent integral term accumulation when saturated
+        .with_deadband(0.0) // Set deadband to zero for exact tracking to setpoint
+        .with_anti_windup(true); // Prevent integral term accumulation when saturated
 
     let controller = ThreadSafePidController::new(config);
 
