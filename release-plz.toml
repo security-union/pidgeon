@@ -14,7 +14,7 @@ git_release_enable = true  # enable release creation on Github/Gitlab
 name = "pidgeon"
 publish = true
 changelog_update = true
-git-release-enable = true
+git_release_enable = true
 
 [changelog]
 protect_breaking_commits = true
