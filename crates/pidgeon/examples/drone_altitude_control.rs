@@ -13,9 +13,9 @@ const DT: f64 = 1.0 / CONTROL_RATE_HZ; // Time step in seconds
 const SETPOINT_ALTITUDE: f64 = 10.0; // Target altitude in meters
 
 // Visualization constants
-const PLOT_WIDTH: usize = 200; // Total width of all plots (columns)
+const PLOT_WIDTH: usize = 240; // Total width of all plots (columns)
 const PLOT_HEIGHT: usize = 60; // Total height of all plots (rows)
-const REFRESH_RATE: usize = 2; // How many simulation steps between display updates
+const REFRESH_RATE: usize = 10; // How many simulation steps between display updates
 const TIME_WINDOW: f64 = 60.0; // Time window to display in seconds
 
 // Wind gust simulation constants
@@ -390,10 +390,10 @@ fn plot_multi_charts(
     );
 
     // Add decorative title boxes at the top of each chart
-    draw_title_box(&mut buffer, "ALTITUDE", 0, 3, chart_width, "\x1B[33m");
+    draw_title_box(&mut buffer, "ALTITUDE (m)", 0, 3, chart_width, "\x1B[33m");
     draw_title_box(
         &mut buffer,
-        "VELOCITY",
+        "VELOCITY (m/s)",
         chart_width,
         3,
         chart_width,
@@ -401,7 +401,7 @@ fn plot_multi_charts(
     );
     draw_title_box(
         &mut buffer,
-        "THRUST",
+        "THRUST (%)",
         0,
         chart_height + 3,
         chart_width,
@@ -409,7 +409,7 @@ fn plot_multi_charts(
     );
     draw_title_box(
         &mut buffer,
-        "ERROR",
+        "ERROR (m)",
         chart_width,
         chart_height + 3,
         chart_width,

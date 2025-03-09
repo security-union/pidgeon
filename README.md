@@ -30,6 +30,13 @@ Because while Google has advanced AI systems that can recognize cats in YouTube 
 
 ### Basic Drone Stabilization Example
 
+```
+cargo run --example drone_altitude_control
+```
+<p align="center">
+    <video src="https://github.com/security-union/pidgeon/assets/drone_altitude_simulation.mov"  width="600"></video>
+</p>
+
 ```rust
 use pidgeon::{PidController, ControllerConfig};
 
