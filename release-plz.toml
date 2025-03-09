@@ -1,8 +1,11 @@
 [workspace]
-# Optional: customize the release process
-# See: https://release-plz.shtab.app/docs/toml-reference/
+allow_dirty = false
+pr_branch_prefix = "release-plz-"
+pr_name = "Release {{ package }} v{{ version }}"
+pr_labels = ["release"]
+publish_allow_dirty = false
+publish_timeout = "10m"
 
-# publish = false  # if you want to disable publishing to crates.io
 # dependencies_update = false  # if you want to disable dependencies update
 # changelog_level = "workspace"  # to disable changelogs set it to 'off'
 git_release_enable = true  # enable release creation on Github/Gitlab
@@ -11,34 +14,8 @@ git_release_enable = true  # enable release creation on Github/Gitlab
 name = "pidgeon"
 publish = true
 path = "crates/pidgeon"
-
-# Whether to update the changelog file
-changelog = true
-
-# Whether to commit the updated version in Cargo.toml
+changelog_update = true
 git-release-enable = true
 
 [changelog]
-# The header template of the changelog
-header = """
-# Changelog
-
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-"""
-
-# Configure the commit types that will be used to generate the changelog
-[changelog.commit-types]
-feat = { title = "Features", semver = "minor" }
-fix = { title = "Bug Fixes", semver = "patch" }
-docs = { title = "Documentation", semver = "patch" }
-style = { title = "Styling", semver = "patch" }
-refactor = { title = "Refactoring", semver = "patch" }
-perf = { title = "Performance", semver = "patch" }
-test = { title = "Testing", semver = "patch" }
-build = { title = "Build System", semver = "patch" }
-ci = { title = "CI", semver = "patch" }
-chore = { title = "Chore", semver = "patch" }
-revert = { title = "Revert", semver = "patch" } 
+protect_breaking_commits = true
