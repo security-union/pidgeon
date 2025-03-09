@@ -276,15 +276,22 @@ impl PidController {
         }
     }
 
-    /// Compute the control output based on the error and time step.
+    /// Compute the control output based on the process value and time step.
     ///
     /// # Arguments
-    /// * `error` - The error (setpoint - process_variable)
+    /// * `process_value` - The current measured value of the process variable
     /// * `dt` - Time step in seconds
     ///
     /// # Returns
     /// The control output
-    pub fn compute(&mut self, error: f64, dt: f64) -> f64 {
+    ///
+    /// # Note
+    /// This method automatically calculates the error as (setpoint - process_value)
+    /// using the setpoint configured in the controller.
+    pub fn compute(&mut self, process_value: f64, dt: f64) -> f64 {
+        // Calculate error using the internal setpoint
+        let error = self.config.setpoint - process_value;
+
         // Update stats first (using the original error)
         self.update_statistics(error);
 
@@ -573,12 +580,17 @@ impl ThreadSafePidController {
         }
     }
 
-    /// Update the controller with a new error measurement and compute the control output.
+    /// Update the controller with the current process value and compute the control output.
     ///
     /// # Parameters
     ///
-    /// * `error` - The current error value (setpoint - measured_value)
+    /// * `process_value` - The current measured value
     /// * `dt` - Time delta in seconds since the last update
+    ///
+    /// # Description
+    ///
+    /// This method automatically calculates the error as (setpoint - process_value)
+    /// using the internally configured setpoint.
     ///
     /// # Time Delta (dt)
     ///
@@ -599,9 +611,9 @@ impl ThreadSafePidController {
     ///    ```
     ///
     /// Choose the approach that best fits your application's requirements for timing accuracy.
-    pub fn compute(&self, error: f64, dt: f64) -> f64 {
+    pub fn compute(&self, process_value: f64, dt: f64) -> f64 {
         let mut controller = self.controller.lock().unwrap();
-        controller.compute(error, dt)
+        controller.compute(process_value, dt)
     }
 
     /// Reset the controller state.
@@ -762,19 +774,19 @@ mod tests {
             .with_kp(2.0) // Increase proportional gain
             .with_ki(0.5) // Increase integral gain
             .with_kd(0.05)
-            .with_output_limits(-100.0, 100.0);
+            .with_output_limits(-100.0, 100.0)
+            .with_setpoint(10.0); // Target is 10.0
 
         let mut controller = PidController::new(config);
 
         // Test scenario: Start at 0, target is 10
         let mut process_value = 0.0;
-        let setpoint = 10.0;
         let dt = 0.1; // 100ms time step
 
         // Run for 200 iterations (20 seconds simulated time)
         for _ in 0..200 {
-            let error = setpoint - process_value;
-            let control_signal = controller.compute(error, dt);
+            // Compute control signal using process value
+            let control_signal = controller.compute(process_value, dt);
 
             // Simple process model: value changes proportionally to control signal
             process_value += control_signal * dt * 0.1;
@@ -786,58 +798,57 @@ mod tests {
         }
 
         // Verify the controller moved the process value close to the setpoint
-        assert!((process_value - setpoint).abs() < 1.0);
+        assert!((process_value - 10.0).abs() < 1.0);
     }
 
     #[test]
     fn test_anti_windup() {
-        // Create two controllers, one with anti-windup and one without
-        let config_with_windup = ControllerConfig::new()
-            .with_kp(0.5)
-            .with_ki(0.5)
+        // Setup controller
+        let config = ControllerConfig::new()
+            .with_kp(1.0)
+            .with_ki(1.0)
             .with_kd(0.0)
-            .with_output_limits(-1.0, 1.0)
-            .with_anti_windup(false);
+            .with_output_limits(-1.0, 1.0) // Intentionally restrictive
+            .with_setpoint(10.0); // Target value
 
-        let config_with_anti_windup = ControllerConfig::new()
-            .with_kp(0.5)
-            .with_ki(0.5)
-            .with_kd(0.0)
-            .with_output_limits(-1.0, 1.0)
-            .with_anti_windup(true);
+        // Test with anti-windup ON
+        let mut controller_with_aw = PidController::new(config.clone().with_anti_windup(true));
 
-        let mut controller_windup = PidController::new(config_with_windup);
-        let mut controller_anti_windup = PidController::new(config_with_anti_windup);
+        // Test with anti-windup OFF
+        let mut controller_without_aw = PidController::new(config.with_anti_windup(false));
 
-        // Create large error to cause windup
-        let error = 10.0;
+        // Process value starts far from setpoint to trigger saturation
+        let mut value_with_aw = 0.0;
+        let mut value_without_aw = 0.0;
         let dt = 0.1;
 
-        // Run both controllers for 50 iterations with large positive error
+        // Run both controllers for several iterations with saturation
         for _ in 0..50 {
-            controller_windup.compute(error, dt);
-            controller_anti_windup.compute(error, dt);
+            // The error is 10.0 - 0.0 = 10.0, which should saturate the output
+            let output_with_aw = controller_with_aw.compute(value_with_aw, dt);
+            let output_without_aw = controller_without_aw.compute(value_without_aw, dt);
+
+            // Both should be saturated at 1.0
+            assert_eq!(output_with_aw, 1.0);
+            assert_eq!(output_without_aw, 1.0);
+
+            // Process values increase by small amount (to keep them in saturation range)
+            value_with_aw += 0.01;
+            value_without_aw += 0.01;
         }
 
-        // Check that the integral term is smaller in the anti-windup controller
-        // This is a better test of anti-windup behavior
-        assert!(controller_anti_windup.integral.abs() < controller_windup.integral.abs());
+        // Now set both process values to 9.5 (close to setpoint)
+        // With anti-windup, controller should recover faster
+        value_with_aw = 9.5;
+        value_without_aw = 9.5;
 
-        // Now apply negative error to both controllers
-        let recovery_error = -1.0;
+        // Run for one step to see response
+        let output_with_aw = controller_with_aw.compute(value_with_aw, dt);
+        let output_without_aw = controller_without_aw.compute(value_without_aw, dt);
 
-        // Run both controllers for some time with negative error
-        for _ in 0..50 {
-            controller_windup.compute(recovery_error, dt);
-            controller_anti_windup.compute(recovery_error, dt);
-        }
-
-        // The controller with anti-windup should respond better to the sign change
-        // This means its output should be more negative after the same number of iterations
-        let output_windup = controller_windup.compute(recovery_error, dt);
-        let output_anti_windup = controller_anti_windup.compute(recovery_error, dt);
-
-        assert!(output_anti_windup < output_windup);
+        // With anti-windup, integral term should have been limited
+        // So output should be smaller than without anti-windup
+        assert!(output_with_aw < output_without_aw);
     }
 
     #[test]
@@ -905,7 +916,8 @@ mod tests {
             .with_kp(1.0)
             .with_ki(0.1)
             .with_kd(0.0)
-            .with_output_limits(-10.0, 10.0);
+            .with_output_limits(-10.0, 10.0)
+            .with_setpoint(10.0);
 
         let controller = ThreadSafePidController::new(config);
 
@@ -915,8 +927,8 @@ mod tests {
         // Start a thread that updates the controller rapidly
         let handle = thread::spawn(move || {
             for i in 0..100 {
-                let error = 10.0 - (i as f64 * 0.1);
-                thread_controller.compute(error, 0.01);
+                let process_value = i as f64 * 0.1;
+                thread_controller.compute(process_value, 0.01);
                 thread::sleep(Duration::from_millis(1));
             }
         });

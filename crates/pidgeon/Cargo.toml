@@ -39,6 +39,7 @@ required-features = ["debugging"]
 [[example]]
 name = "drone_altitude_control"
 path = "examples/drone_altitude_control.rs"
+required-features = ["debugging"]
 
 [[bench]]
 name = "pid_benchmark"
