@@ -326,7 +326,6 @@ fn plot_multi_charts(
         '●',
         '━',
         Some(SETPOINT_ALTITUDE),
-        "\x1B[33m", // Yellow
     );
 
     // Upper right: Velocity
@@ -345,8 +344,7 @@ fn plot_multi_charts(
         "Velocity (m/s)",
         '◆',
         '╌',
-        Some(0.0),  // Zero line
-        "\x1B[34m", // Blue
+        Some(0.0), // Zero line
     );
 
     // Lower left: Thrust
@@ -366,7 +364,6 @@ fn plot_multi_charts(
         '■',
         '┄',
         None,
-        "\x1B[31m", // Red
     );
 
     // Lower right: Error
@@ -385,35 +382,19 @@ fn plot_multi_charts(
         "Error (m)",
         '▲',
         '┆',
-        Some(0.0),  // Zero line
-        "\x1B[32m", // Green
+        Some(0.0), // Zero line
     );
 
     // Add decorative title boxes at the top of each chart
-    draw_title_box(&mut buffer, "ALTITUDE (m)", 0, 3, chart_width, "\x1B[33m");
-    draw_title_box(
-        &mut buffer,
-        "VELOCITY (m/s)",
-        chart_width,
-        3,
-        chart_width,
-        "\x1B[34m",
-    );
-    draw_title_box(
-        &mut buffer,
-        "THRUST (%)",
-        0,
-        chart_height + 3,
-        chart_width,
-        "\x1B[31m",
-    );
+    draw_title_box(&mut buffer, "ALTITUDE (m)", 0, 3, chart_width);
+    draw_title_box(&mut buffer, "VELOCITY (m/s)", chart_width, 3, chart_width);
+    draw_title_box(&mut buffer, "THRUST (%)", 0, chart_height + 3, chart_width);
     draw_title_box(
         &mut buffer,
         "ERROR (m)",
         chart_width,
         chart_height + 3,
         chart_width,
-        "\x1B[32m",
     );
 
     // Mark notable events as vertical lines across all charts
@@ -535,7 +516,6 @@ fn draw_single_chart(
     point_char: char,
     line_char: char,
     reference_line: Option<f64>,
-    color_code: &str,
 ) {
     // Adjust plot dimensions to account for axes and labels
     let plot_width = width - 15; // Reserve space for y-axis labels
@@ -756,7 +736,6 @@ fn draw_title_box(
     x_offset: usize,
     y_offset: usize,
     width: usize,
-    color_code: &str,
 ) {
     // Calculate box parameters
     let box_width = title.len() + 4; // Add padding

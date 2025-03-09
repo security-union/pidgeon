@@ -34,188 +34,55 @@ Because while Google has advanced AI systems that can recognize cats in YouTube 
 cargo run --example drone_altitude_control
 ```
 <p align="center">
-    <video src="https://github.com/user-attachments/assets/ba0cf3f6-d61b-4323-bed1-c9be2dbeb851
-"  width="600"></video>
+    <video src="https://github.com/user-attachments/assets/ba0cf3f6-d61b-4323-bed1-c9be2dbeb851"  width="600"></video>
 </p>
 
-```rust
-use pidgeon::{PidController, ControllerConfig};
+#### About the Drone Altitude Simulation
 
-fn main() {
-    // Create a PID controller for roll stabilization
-    // The gains need to be tuned for your specific drone's dynamics:
-    // - Kp: Proportional gain. Directly responds to the current error.
-    // - Ki: Integral gain. Addresses steady-state error and compensates for biases.
-    // - Kd: Derivative gain. Provides damping to reduce overshoot and oscillation.
-    let config = ControllerConfig::new()
-        .with_kp(4.0)     // Higher values give stronger response to error
-        .with_ki(0.01)    // Small value prevents excessive integral windup
-        .with_kd(2.5)     // Provides responsive damping for stability
-        .with_output_limits(-30.0, 30.0)  // Prevents extreme control inputs
-        .with_anti_windup(true);          // Prevents integral term from accumulating when saturated
-    
-    let mut controller = PidController::new(config);
-    
-    // In production systems, control loops should run at consistent intervals
-    // for predictable behavior. Timing jitter can degrade control performance.
-    let dt = 0.01;  // Time step in seconds (100Hz control frequency)
-    
-    // Example iteration: read sensor, compute control signal, apply to motors
-    let current_roll = 5.2;  // Current roll angle from IMU (5.2° tilted right)
-    let target_roll = 0.0;   // Target is level flight (0°)
-    
-    // Calculate error and compute control output
-    // Note: Error sign convention is important - target minus current measurement
-    // gives negative control signal for positive error (corrective action)
-    let error = target_roll - current_roll;
-    let control_signal = controller.compute(error, dt);
-    
-    println!("Roll error: {:.2}°, Control signal: {:.2}%", error, control_signal);
-    
-    // In a real drone, you would now apply this control signal to the motors
-    // For example, adjusting the motor speeds to correct the roll angle
-    apply_to_motors(control_signal);
-    
-    // Controller statistics are available for tuning and monitoring
-    // These metrics help evaluate controller performance over time
-    let stats = controller.get_statistics();
-    println!("Average error: {:.2}°", stats.average_error);
-    println!("Max overshoot: {:.2}°", stats.max_overshoot);
-}
+The visualization above shows our PID controller in action, maintaining a quadcopter's altitude despite various disturbances. This simulator models real-world drone physics including:
 
-fn apply_to_motors(control_signal: f64) {
-    // Apply control signal to motors (simplified example)
-    // In a quadcopter, roll is controlled by differential thrust between left/right motors
-    let left_motor_power = 50.0 - control_signal / 2.0;  // Decrease left motor to roll right
-    let right_motor_power = 50.0 + control_signal / 2.0; // Increase right motor to roll right
-    
-    // Ensure motor commands stay within safe operating range
-    let left_motor_power = left_motor_power.clamp(0.0, 100.0);
-    let right_motor_power = right_motor_power.clamp(0.0, 100.0);
-    
-    println!("Left motor: {:.1}%, Right motor: {:.1}%", left_motor_power, right_motor_power);
-}
-```
+- **Accurate Flight Dynamics**: Simulates mass, thrust, drag, and gravitational forces
+- **Controller Response**: Watch the PID controller adjust thrust to maintain the 10-meter target altitude
+- **Multiple Visualizations**: The four-panel display shows Altitude, Velocity, Thrust, and Error over time
+- **Environmental Disturbances**: Red exclamation marks (!) indicate wind gusts hitting the drone
+- **Physical Events**: At the 30-second mark, a payload drop reduces the drone's mass by 20%
+- **Battery Simulation**: Gradual thrust reduction simulates battery voltage drop over time
+
+The visualization demonstrates how the PID controller responds to these challenges:
+1. Initial ascent to target altitude with proper damping (minimal overshoot)
+2. Rapid recovery from unexpected wind gusts (external disturbances) (red lines)
+3. Automatic adaptation to the lighter weight after payload drop (system parameter changes) (red lines)
+4. Compensation for decreasing battery voltage (actuator effectiveness degradation)
+
+Each of these scenarios demonstrates real-world challenges that PID controllers solve elegantly. The beautiful visualization makes it easy to understand the relationship between altitude, velocity, thrust adjustments, and error over time.
 
 ### Thread-Safe Controller for Multi-Threaded Applications
 
-```rust
-use pidgeon::{ThreadSafePidController, ControllerConfig};
-use std::thread;
-use std::time::Duration;
-
-fn main() {
-    // Create a thread-safe PID controller for altitude control
-    // Note: Thread-safe controllers have a small performance overhead
-    // but are essential for concurrent sensor/actuator architectures
-    let altitude_controller = ThreadSafePidController::new(
-        ControllerConfig::new()
-            .with_kp(2.0)     // Moderate response to altitude errors
-            .with_ki(0.1)     // Accumulate error to reach precise altitude
-            .with_kd(0.5)     // Light damping to prevent oscillation
-            .with_output_limits(0.0, 100.0)  // Thrust can only be positive
-    );
-    
-    // Clone for use in sensor thread
-    // ThreadSafePidController implements Clone for sharing between threads
-    let sensor_controller = altitude_controller.clone();
-    
-    // Sensor thread: reads altitude and updates the controller
-    // In production systems, this would typically run at a fixed frequency
-    // determined by sensor capabilities and control requirements
-    let sensor_thread = thread::spawn(move || {
-        let dt = 0.01; // 100Hz sampling rate - critical for stable control
-        
-        // In a real application, this would run continuously
-        for _ in 0..10 {
-            // Read sensor (simulated)
-            // Real implementations should include sensor validation and filtering
-            let current_altitude = read_altitude_sensor();
-            let target_altitude = 10.0; // meters
-            
-            // Update controller with new error
-            // The update_error method allows decoupling sensing from actuation
-            let error = target_altitude - current_altitude;
-            sensor_controller.update_error(error, dt);
-            
-            // Maintain consistent timing for predictable control behavior
-            thread::sleep(Duration::from_millis(10));
-        }
-    });
-    
-    // Control thread: gets control signal and applies to motors
-    // Typically runs at a different rate than the sensor thread
-    let control_thread = thread::spawn(move || {
-        // In a real application, this would run continuously
-        for _ in 0..10 {
-            // Get latest control signal computed by the controller
-            // This reads the most recent value without blocking the sensor thread
-            let thrust = altitude_controller.get_control_signal();
-            
-            // Apply to drone's motors
-            // In a real system, this would interface with motor controllers/ESCs
-            println!("Setting thrust to: {:.1}%", thrust);
-            
-            // Control loop typically runs slower than sensing
-            thread::sleep(Duration::from_millis(20));
-        }
-    });
-    
-    // Wait for threads to complete
-    sensor_thread.join().unwrap();
-    control_thread.join().unwrap();
-}
-
-fn read_altitude_sensor() -> f64 {
-    // Simulate reading from barometer/rangefinder
-    // Real implementations would include proper filtering and sensor fusion
-    8.5 + (rand::random::<f64>() - 0.5) * 0.2
-}
-```
-
-### Temperature Control Example
+This example demonstrates how to create a Controller, please refer to the examples directory for complete programs.
 
 ```rust
-use pidgeon::{PidController, ControllerConfig};
+use pidgeon::{ControllerConfig, ThreadSafePidController};
+use rand::{thread_rng, Rng};
+use std::{
+    io::{self, Write},
+    thread,
+    time::Duration,
+};
+
+const SETPOINT_ALTITUDE: f64 = 10.0; // Target altitude in meters
 
 fn main() {
-    // Create a PID controller for temperature control
-    // Temperature control typically requires different tuning than motion control:
-    // - Slower response times
-    // - Higher integral component to eliminate steady-state error
-    // - Lower derivative component due to sensor noise
+    // Create a PID controller with carefully tuned gains for altitude control
     let config = ControllerConfig::new()
-        .with_kp(2.0)    // Moderate proportional gain for stable response
-        .with_ki(0.5)    // Higher integral gain to eliminate steady-state error
-        .with_kd(1.0)    // Some derivative action to prevent overshoot
-        .with_output_limits(-100.0, 100.0); // Full range for heating/cooling
-    
-    let mut controller = PidController::new(config);
-    
-    // Example control iteration
-    // Temperature control typically uses longer sample times than motion control
-    let current_temp = 19.5;  // Current temperature in Celsius
-    let target_temp = 22.0;   // Target temperature
-    let dt = 1.0;             // Time step in seconds (typical for HVAC)
-    
-    // Calculate error and control signal
-    let error = target_temp - current_temp;
-    let control_signal = controller.compute(error, dt);
-    
-    println!("Temperature error: {:.1}°C", error);
-    println!("Control signal: {:.1}%", control_signal);
-    
-    // Determine HVAC action based on control signal
-    // In a real system, this would activate relays, valves, or variable-speed drives
-    let action = if control_signal > 5.0 {
-        "Heating"
-    } else if control_signal < -5.0 {
-        "Cooling"
-    } else {
-        "Idle"
-    };
-    
-    println!("HVAC action: {}", action);
+        .with_kp(10.0) // Proportional gain - immediate response to altitude error
+        .with_ki(5.0) // Integral gain - eliminates steady-state error (hovering accuracy)
+        .with_kd(8.0) // Derivative gain - dampens oscillations (crucial for stability)
+        .with_output_limits(0.0, 100.0) // Thrust percentage (0-100%)
+        .with_setpoint(SETPOINT_ALTITUDE)
+        .with_deadband(0.0) // Set deadband to zero for exact tracking to setpoint
+        .with_anti_windup(true); // Prevent integral term accumulation when saturated
+
+    let controller = ThreadSafePidController::new(config);
 }
 ```
 
