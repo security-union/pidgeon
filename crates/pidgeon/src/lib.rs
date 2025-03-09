@@ -1480,7 +1480,7 @@ mod tests {
             let acceleration = net_force / drone_mass;
 
             // Print diagnostics
-            if i % 10 == 0 || i < 5 || i > 95 {
+            if i % 10 == 0 || !(5..=95).contains(&i) {
                 let p_term = 10.0 * error_before; // Kp * error
                 let i_term = 2.0 * controller.integral; // Ki * integral
 
@@ -1552,7 +1552,7 @@ mod tests {
 
         // Drone parameters (matching the example)
         let mut altitude = 0.0;
-        let mut velocity = 0.0;
+        let mut velocity: f64 = 0.0;
         let dt = 0.05;
         let drone_mass = 1.2;
         let gravity = 9.81;
@@ -1589,7 +1589,7 @@ mod tests {
 
             // Calculate forces
             let weight_force = drone_mass * gravity;
-            let drag_force = drag_coefficient * (velocity as f64).abs() * velocity;
+            let drag_force = drag_coefficient * velocity.abs() * velocity;
             let net_force = thrust - weight_force - drag_force;
             let acceleration = net_force / drone_mass;
 
@@ -1651,7 +1651,7 @@ mod tests {
             thrust = control_signal * max_thrust / 100.0;
 
             let weight_force = drone_mass * gravity;
-            let drag_force = drag_coefficient * (velocity as f64).abs() * velocity;
+            let drag_force = drag_coefficient * velocity.abs() * velocity;
             let net_force = thrust - weight_force - drag_force;
             let acceleration = net_force / drone_mass;
 
@@ -1708,7 +1708,7 @@ mod tests {
             thrust = commanded_thrust * max_thrust / 100.0;
 
             let weight_force = drone_mass * gravity;
-            let drag_force = drag_coefficient * (velocity as f64).abs() * velocity;
+            let drag_force = drag_coefficient * velocity.abs() * velocity;
             let net_force = thrust - weight_force - drag_force;
             let acceleration = net_force / drone_mass;
 
