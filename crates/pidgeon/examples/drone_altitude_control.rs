@@ -362,6 +362,12 @@ fn plot_multi_charts(
         "\x1B[32m", // Green
     );
     
+    // Add decorative title boxes at the top of each chart
+    draw_title_box(&mut buffer, "ALTITUDE", 0, 0, chart_width, "\x1B[33m");
+    draw_title_box(&mut buffer, "VELOCITY", chart_width, 0, chart_width, "\x1B[34m");
+    draw_title_box(&mut buffer, "THRUST", 0, chart_height, chart_width, "\x1B[31m");
+    draw_title_box(&mut buffer, "ERROR", chart_width, chart_height, chart_width, "\x1B[32m");
+    
     // Mark notable events as vertical lines across all charts
     for i in 0..time_data.len() {
         let condition = &condition_data[i];
@@ -400,6 +406,22 @@ fn plot_multi_charts(
     // Print the entire buffer with colors
     for y in 0..total_height {
         for x in 0..total_width {
+            let chart_width = total_width / 2;
+            let chart_height = total_height / 2;
+            
+            // Determine which chart/quadrant this character belongs to
+            let is_in_top_left = y < chart_height && x < chart_width;
+            let is_in_top_right = y < chart_height && x >= chart_width;
+            let is_in_bottom_left = y >= chart_height && x < chart_width;
+            let is_in_bottom_right = y >= chart_height && x >= chart_width;
+            
+            // Check if this is in a title box region (top portion of each chart)
+            let is_in_title_region = 
+                (is_in_top_left && y < 5) || 
+                (is_in_top_right && y < 5) ||
+                (is_in_bottom_left && y >= chart_height && y < chart_height + 5) ||
+                (is_in_bottom_right && y >= chart_height && y < chart_height + 5);
+                
             match buffer[y][x] {
                 '●' => print!("\x1B[33m●\x1B[0m"), // Yellow for Altitude
                 '◆' => print!("\x1B[34m◆\x1B[0m"), // Blue for Velocity
@@ -410,7 +432,38 @@ fn plot_multi_charts(
                 '┄' => print!("\x1B[31m┄\x1B[0m"), // Red line for Thrust
                 '┆' => print!("\x1B[32m┆\x1B[0m"), // Green line for Error
                 '!' => print!("\x1B[1;31m!\x1B[0m"), // Bright red for events
-                _ => print!("{}", buffer[y][x]),
+                // Title box characters and text within title box
+                '═' | '║' | '╔' | '╗' | '╚' | '╝' => {
+                    if is_in_top_left {
+                        print!("\x1B[1;33m{}\x1B[0m", buffer[y][x]); // Bright yellow
+                    } else if is_in_top_right {
+                        print!("\x1B[1;34m{}\x1B[0m", buffer[y][x]); // Bright blue
+                    } else if is_in_bottom_left {
+                        print!("\x1B[1;31m{}\x1B[0m", buffer[y][x]); // Bright red
+                    } else if is_in_bottom_right {
+                        print!("\x1B[1;32m{}\x1B[0m", buffer[y][x]); // Bright green
+                    } else {
+                        print!("{}", buffer[y][x]);
+                    }
+                },
+                // Any other characters within the title region should be colored appropriately
+                _ => {
+                    if is_in_title_region {
+                        if is_in_top_left {
+                            print!("\x1B[1;33m{}\x1B[0m", buffer[y][x]); // Bright yellow
+                        } else if is_in_top_right {
+                            print!("\x1B[1;34m{}\x1B[0m", buffer[y][x]); // Bright blue
+                        } else if is_in_bottom_left {
+                            print!("\x1B[1;31m{}\x1B[0m", buffer[y][x]); // Bright red
+                        } else if is_in_bottom_right {
+                            print!("\x1B[1;32m{}\x1B[0m", buffer[y][x]); // Bright green
+                        } else {
+                            print!("{}", buffer[y][x]);
+                        }
+                    } else {
+                        print!("{}", buffer[y][x]);
+                    }
+                },
             }
         }
         println!();
@@ -636,5 +689,59 @@ fn draw_line(
             err += dx;
             y0 += sy;
         }
+    }
+}
+
+/// Draw a title box with decorative border
+fn draw_title_box(
+    buffer: &mut Vec<Vec<char>>,
+    title: &str,
+    x_offset: usize,
+    y_offset: usize,
+    width: usize,
+    color_code: &str,
+) {
+    // Only draw if we have enough room for the title
+    if y_offset < 3 {
+        return;
+    }
+    
+    // Calculate box parameters
+    let box_width = title.len() + 4; // Add padding
+    let box_start_x = x_offset + (width / 2) - (box_width / 2);
+    
+    // Ensure we don't go out of bounds
+    if box_start_x + box_width >= buffer[0].len() || y_offset >= buffer.len() {
+        return;
+    }
+    
+    // Use brighter versions of the colors for the title
+    let color = match color_code {
+        "\x1B[33m" => "\x1B[1;33m", // Bright yellow
+        "\x1B[34m" => "\x1B[1;34m", // Bright blue
+        "\x1B[31m" => "\x1B[1;31m", // Bright red
+        "\x1B[32m" => "\x1B[1;32m", // Bright green
+        _ => color_code,
+    };
+    
+    // Draw top and bottom borders
+    for x in box_start_x..(box_start_x + box_width) {
+        buffer[y_offset - 3][x] = '═';
+        buffer[y_offset - 1][x] = '═';
+    }
+    
+    // Draw left and right borders
+    buffer[y_offset - 2][box_start_x] = '║';
+    buffer[y_offset - 2][box_start_x + box_width - 1] = '║';
+    
+    // Draw corners
+    buffer[y_offset - 3][box_start_x] = '╔';
+    buffer[y_offset - 3][box_start_x + box_width - 1] = '╗';
+    buffer[y_offset - 1][box_start_x] = '╚';
+    buffer[y_offset - 1][box_start_x + box_width - 1] = '╝';
+    
+    // Draw title, centered in the box
+    for (i, ch) in title.chars().enumerate() {
+        buffer[y_offset - 2][box_start_x + 2 + i] = ch;
     }
 }
