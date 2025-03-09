@@ -13,11 +13,10 @@ const DT: f64 = 1.0 / CONTROL_RATE_HZ; // Time step in seconds
 const SETPOINT_ALTITUDE: f64 = 10.0; // Target altitude in meters
 
 // Visualization constants
-const PLOT_WIDTH: usize = 140; // Total width of all plots (columns)
+const PLOT_WIDTH: usize = 200; // Total width of all plots (columns)
 const PLOT_HEIGHT: usize = 60; // Total height of all plots (rows)
 const REFRESH_RATE: usize = 2; // How many simulation steps between display updates
 const TIME_WINDOW: f64 = 60.0; // Time window to display in seconds
-const POINTS_PER_WINDOW: usize = 80; // Number of data points to show in the window
 
 // Wind gust simulation constants
 const NUM_RANDOM_GUSTS: usize = 3; // Number of random wind gusts
