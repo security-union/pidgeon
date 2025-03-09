@@ -1,22 +1,32 @@
 use pidgeon::{ControllerConfig, ThreadSafePidController};
 use rand::{thread_rng, Rng};
-use std::{thread, time::Duration};
+use std::{
+    io::{self, Write},
+    thread, 
+    time::Duration
+};
 
 // Simulation constants - easy to adjust
-const SIMULATION_DURATION_SECONDS: f64 = 90.0; // Simulation duration in seconds
+const SIMULATION_DURATION_SECONDS: f64 = 60.0; // Reduced for better visualization
 const CONTROL_RATE_HZ: f64 = 20.0; // Control loop rate in Hz
 const DT: f64 = 1.0 / CONTROL_RATE_HZ; // Time step in seconds
 const SETPOINT_ALTITUDE: f64 = 10.0; // Target altitude in meters
 
+// Visualization constants
+const PLOT_WIDTH: usize = 80;
+const PLOT_HEIGHT: usize = 20;
+const REFRESH_RATE: usize = 2; // How many simulation steps between display updates
+
 // Wind gust simulation constants
-const NUM_RANDOM_GUSTS: usize = 5; // Number of random wind gusts
+const NUM_RANDOM_GUSTS: usize = 3; // Number of random wind gusts
 const MIN_GUST_VELOCITY: f64 = -4.0; // Minimum wind gust velocity (negative = downward)
 const MAX_GUST_VELOCITY: f64 = 3.0; // Maximum wind gust velocity (positive = upward)
 
-/// # Drone Altitude Control Simulation
+/// # Drone Altitude Control Simulation with ASCII Visualization
 ///
 /// This example demonstrates using the Pidgeon PID controller library
-/// to regulate the altitude of a quadcopter drone with realistic physics.
+/// to regulate the altitude of a quadcopter drone, visualized with an
+/// ASCII chart showing the controller's performance in real-time.
 ///
 /// ## Physics Modeled:
 /// - Drone mass and inertia
@@ -26,9 +36,8 @@ const MAX_GUST_VELOCITY: f64 = 3.0; // Maximum wind gust velocity (positive = up
 /// - Wind disturbances
 /// - Battery voltage drop affecting motor performance
 ///
-/// The simulation shows how the PID controller maintains the desired altitude
-/// despite external disturbances and changing conditions - a critical requirement
-/// for autonomous drone operations.
+/// The visualization shows how the PID controller responds to disturbances
+/// with altitude, velocity, thrust, and error plotted over time.
 fn main() {
     // Create a PID controller with carefully tuned gains for altitude control
     let config = ControllerConfig::new()
@@ -58,6 +67,13 @@ fn main() {
     let mut thrust = 0.0; // Initial thrust
     let mut commanded_thrust = 0.0; // Commanded thrust from PID
 
+    // Circular buffers for plotting
+    let mut altitude_history = vec![0.0; PLOT_WIDTH];
+    let mut velocity_history = vec![0.0; PLOT_WIDTH];
+    let mut thrust_history = vec![0.0; PLOT_WIDTH];
+    let mut error_history = vec![0.0; PLOT_WIDTH];
+    let mut condition_history = vec!["Starting".to_string(); PLOT_WIDTH];
+    
     // Generate random wind gust times and velocities
     let mut rng = thread_rng();
     let mut wind_gusts = Vec::with_capacity(NUM_RANDOM_GUSTS);
@@ -73,15 +89,12 @@ fn main() {
     // Sort wind gusts by time for easier processing
     wind_gusts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
-    println!("Drone Altitude Control Simulation");
-    println!("=================================");
+    println!("Drone Altitude Control Simulation with Live Visualization");
+    println!("=======================================================");
     println!("Target altitude: {:.1} meters", SETPOINT_ALTITUDE);
     println!("Drone mass: {:.1} kg", drone_mass);
     println!("Max thrust: {:.1} N", max_thrust);
-    println!(
-        "Simulation duration: {:.1} seconds",
-        SIMULATION_DURATION_SECONDS
-    );
+    println!("Simulation duration: {:.1} seconds", SIMULATION_DURATION_SECONDS);
     println!("Control rate: {:.1} Hz (dt = {:.3}s)", CONTROL_RATE_HZ, DT);
     println!("\nPlanned wind gusts:");
     for (i, (time, velocity)) in wind_gusts.iter().enumerate() {
@@ -92,9 +105,8 @@ fn main() {
             velocity
         );
     }
-    println!();
-    println!("Time(s) | Altitude(m) | Velocity(m/s) | Thrust(%) | Error(m) | Condition");
-    println!("--------|-------------|---------------|-----------|----------|----------");
+    println!("\nStarting visualization in 3 seconds...");
+    thread::sleep(Duration::from_secs(3));
 
     // Simulation loop
     for time_step in 0..iterations {
@@ -134,6 +146,9 @@ fn main() {
             velocity = 0.0;
         }
 
+        // Calculate error for recording
+        let error = SETPOINT_ALTITUDE - altitude;
+
         // Determine drone condition for display
         // Calculate the exact thrust percentage needed for hovering
         let hover_thrust_pct = gravity * drone_mass * 100.0 / max_thrust;
@@ -149,62 +164,84 @@ fn main() {
             "Hovering"
         };
 
-        // Print status approximately every half second
-        if time_step % (CONTROL_RATE_HZ as usize / 2) == 0 {
-            // Calculate error for display (setpoint - process_value)
-            let error = SETPOINT_ALTITUDE - altitude;
-
-            println!(
-                "{:6.1} | {:11.2} | {:13.2} | {:9.1} | {:8.2} | {}",
-                time, altitude, velocity, commanded_thrust, error, drone_condition
-            );
-        }
+        // Update history circular buffers
+        altitude_history[time_step % PLOT_WIDTH] = altitude;
+        velocity_history[time_step % PLOT_WIDTH] = velocity;
+        thrust_history[time_step % PLOT_WIDTH] = commanded_thrust;
+        error_history[time_step % PLOT_WIDTH] = error;
+        condition_history[time_step % PLOT_WIDTH] = drone_condition.to_string();
 
         // Check for planned wind gusts
         for (gust_time, gust_velocity) in &wind_gusts {
             if (time - gust_time).abs() < DT / 2.0 {
                 velocity += gust_velocity;
-                let direction = if *gust_velocity > 0.0 {
-                    "upward"
-                } else {
-                    "downward"
-                };
-                println!(
-                    ">>> Wind gust at {:.1}s! {} velocity changed by {:.1} m/s",
-                    time,
-                    direction,
-                    gust_velocity.abs()
-                );
+                let direction = if *gust_velocity > 0.0 { "upward" } else { "downward" };
+                
+                // Record gust event in condition history
+                condition_history[time_step % PLOT_WIDTH] = format!("WIND GUST {}!", direction);
             }
         }
 
-        // Payload drop at 45 seconds (drone becomes 20% lighter)
-        if (time - 45.0).abs() < DT / 2.0 {
+        // Payload drop at 30 seconds (drone becomes 20% lighter)
+        if (time - 30.0).abs() < DT / 2.0 {
             drone_mass *= 0.8;
-            println!(
-                ">>> Payload dropped at {:.1}s! Drone mass reduced to {:.1} kg",
-                time, drone_mass
-            );
+            
+            // Record payload drop in condition history
+            condition_history[time_step % PLOT_WIDTH] = "PAYLOAD DROP!".to_string();
         }
 
-        // Slow down simulation to make it observable but not too slow
-        thread::sleep(Duration::from_millis(2));
-    }
+        // Update visualization approximately every REFRESH_RATE steps
+        if time_step % REFRESH_RATE == 0 {
+            // Clear terminal screen
+            print!("\x1B[2J\x1B[1;1H");
+            io::stdout().flush().unwrap();
+            
+            // Display current simulation time
+            println!("Drone Altitude Control Simulation - Time: {:.1}s", time);
+            println!("=========================================================");
+            
+            // Display state summary in top left
+            println!("System State:");
+            println!("╔════════════════════════════════╗");
+            println!("║ Time:      {:.2} s             ║", time);
+            println!("║ Altitude:  {:.2} m     (Target: {:.1} m) ║", altitude, SETPOINT_ALTITUDE);
+            println!("║ Velocity:  {:.2} m/s           ║", velocity);
+            println!("║ Thrust:    {:.2} %             ║", commanded_thrust);
+            println!("║ Error:     {:.2} m             ║", error);
+            println!("║ Condition: {:<18} ║", drone_condition);
+            println!("╚════════════════════════════════╝");
+            
+            // Plot legends
+            println!("Plot: Yellow=Altitude(m) | Blue=Velocity(m/s) | Red=Thrust(%) | Green=Error(m)");
+            
+            // Generate ASCII plot
+            plot_ascii_chart(
+                &altitude_history,
+                &velocity_history,
+                &thrust_history,
+                &error_history,
+                &condition_history,
+                time_step,
+                PLOT_WIDTH,
+                PLOT_HEIGHT,
+            );
+            
+            // Scale information for the plot
+            println!("Scale: Alt[0-15m] | Vel[-5-5m/s] | Thrust[0-100%] | Error[-5-5m]");
+            println!("Last Event: {}", condition_history[time_step % PLOT_WIDTH]);
+        }
 
-    println!(
-        "\nSimulation complete! Ran for {:.1} seconds of simulated time.",
-        SIMULATION_DURATION_SECONDS
-    );
+        // Sleep for visualization purposes
+        thread::sleep(Duration::from_millis(10));
+    }
 
     // Print controller statistics
     let stats = controller.get_statistics();
+    println!("\nSimulation complete! Ran for {:.1} seconds of simulated time.", SIMULATION_DURATION_SECONDS);
     println!("\nController Performance Statistics:");
     println!("----------------------------------");
     println!("Average altitude error: {:.2} meters", stats.average_error);
-    println!(
-        "Maximum deviation from setpoint: {:.2} meters",
-        stats.max_overshoot
-    );
+    println!("Maximum deviation from setpoint: {:.2} meters", stats.max_overshoot);
     println!("Settling time: {:.1} seconds", stats.settling_time);
     println!("Rise time: {:.1} seconds", stats.rise_time);
 
@@ -213,4 +250,130 @@ fn main() {
     println!("✓ Adaptation to changing conditions is required");
     println!("✓ Robust response to disturbances is essential");
     println!("✓ Thread-safety enables integration with complex robotic systems");
+}
+
+/// Plots multiple time series data as an ASCII chart
+fn plot_ascii_chart(
+    altitude_data: &[f64],
+    velocity_data: &[f64],
+    thrust_data: &[f64],
+    error_data: &[f64],
+    condition_data: &[String],
+    current_step: usize,
+    width: usize,
+    height: usize,
+) {
+    // Define value ranges for scaling
+    let alt_min = 0.0;
+    let alt_max = 15.0;
+    let vel_min = -5.0;
+    let vel_max = 5.0;
+    let thrust_min = 0.0;
+    let thrust_max = 100.0;
+    let error_min = -5.0;
+    let error_max = 5.0;
+    
+    // Build the plot area - initially fill with spaces
+    let mut plot = vec![vec![' '; width]; height];
+    
+    // Draw horizontal axis
+    for x in 0..width {
+        plot[height-1][x] = '─';
+    }
+    
+    // Draw vertical axis
+    for y in 0..height {
+        plot[y][0] = '│';
+    }
+    
+    // Draw origin
+    plot[height-1][0] = '└';
+    
+    // Draw setpoint line (target altitude)
+    let setpoint_y = height - 1 - ((SETPOINT_ALTITUDE - alt_min) / (alt_max - alt_min) * (height as f64 - 2.0)) as usize;
+    if setpoint_y > 0 && setpoint_y < height - 1 {
+        for x in 1..width {
+            if plot[setpoint_y][x] == ' ' {
+                plot[setpoint_y][x] = '·';
+            }
+        }
+    }
+    
+    // Calculate the visible window (last 'width' data points)
+    let start_idx = if current_step >= width {
+        current_step - width + 1
+    } else {
+        0
+    };
+    
+    // Plot the data sets
+    for x in 0..width {
+        let idx = (start_idx + x) % width;
+        
+        // Plot altitude (Yellow)
+        if let Some(altitude) = altitude_data.get(idx) {
+            if *altitude >= alt_min && *altitude <= alt_max {
+                let y = height - 1 - ((*altitude - alt_min) / (alt_max - alt_min) * (height as f64 - 2.0)) as usize;
+                if y < height {
+                    plot[y][x] = 'A';
+                }
+            }
+        }
+        
+        // Plot velocity (Blue)
+        if let Some(velocity) = velocity_data.get(idx) {
+            if *velocity >= vel_min && *velocity <= vel_max {
+                let y = height - 1 - ((*velocity - vel_min) / (vel_max - vel_min) * (height as f64 - 2.0)) as usize;
+                if y < height && plot[y][x] == ' ' {
+                    plot[y][x] = 'V';
+                }
+            }
+        }
+        
+        // Plot thrust (Red)
+        if let Some(thrust) = thrust_data.get(idx) {
+            if *thrust >= thrust_min && *thrust <= thrust_max {
+                let y = height - 1 - ((*thrust - thrust_min) / (thrust_max - thrust_min) * (height as f64 - 2.0)) as usize;
+                if y < height && (plot[y][x] == ' ' || plot[y][x] == '·') {
+                    plot[y][x] = 'T';
+                }
+            }
+        }
+        
+        // Plot error (Green)
+        if let Some(error) = error_data.get(idx) {
+            if *error >= error_min && *error <= error_max {
+                let y = height - 1 - ((*error - error_min) / (error_max - error_min) * (height as f64 - 2.0)) as usize;
+                if y < height && (plot[y][x] == ' ' || plot[y][x] == '·') {
+                    plot[y][x] = 'E';
+                }
+            }
+        }
+    }
+    
+    // Mark notable events with exclamation marks
+    for x in 0..width {
+        let idx = (start_idx + x) % width;
+        if let Some(condition) = condition_data.get(idx) {
+            if condition.contains("WIND GUST") || condition.contains("PAYLOAD DROP") {
+                plot[0][x] = '!';
+            }
+        }
+    }
+    
+    // Print the plot using ANSI colors
+    for y in 0..height {
+        print!("  "); // Add some padding
+        for x in 0..width {
+            match plot[y][x] {
+                'A' => print!("\x1B[33mA\x1B[0m"), // Yellow for Altitude
+                'V' => print!("\x1B[34mV\x1B[0m"), // Blue for Velocity
+                'T' => print!("\x1B[31mT\x1B[0m"), // Red for Thrust
+                'E' => print!("\x1B[32mE\x1B[0m"), // Green for Error
+                '!' => print!("\x1B[1;31m!\x1B[0m"), // Bright red for events
+                _ => print!("{}", plot[y][x]),
+            }
+        }
+        println!();
+    }
 }
