@@ -6,7 +6,7 @@ use std::{thread, time::Duration};
 const SIMULATION_DURATION_SECONDS: f64 = 90.0; // Simulation duration in seconds
 const CONTROL_RATE_HZ: f64 = 20.0; // Control loop rate in Hz
 const DT: f64 = 1.0 / CONTROL_RATE_HZ; // Time step in seconds
-const SETPOINT_ALTITUDE_METERS: f64 = 10.0; // Target altitude in meters
+const SETPOINT_ALTITUDE: f64 = 10.0; // Target altitude in meters
 
 // Wind gust simulation constants
 const NUM_RANDOM_GUSTS: usize = 5; // Number of random wind gusts
@@ -32,12 +32,13 @@ const MAX_GUST_VELOCITY: f64 = 3.0; // Maximum wind gust velocity (positive = up
 fn main() {
     // Create a PID controller with carefully tuned gains for altitude control
     let config = ControllerConfig::new()
-        .with_kp(10.0) // Proportional gain - immediate response to altitude error
-        .with_ki(2.0) // Integral gain - eliminates steady-state error (hovering accuracy)
-        .with_kd(8.0) // Derivative gain - dampens oscillations (crucial for stability)
-        .with_output_limits(0.0, 100.0) // Thrust percentage (0-100%)
-        .with_setpoint(SETPOINT_ALTITUDE_METERS)
-        .with_anti_windup(true); // Prevent integral term accumulation when saturated
+        .with_kp(10.0)      // Proportional gain - immediate response to altitude error
+        .with_ki(5.0)       // Integral gain - eliminates steady-state error (hovering accuracy)
+        .with_kd(8.0)       // Derivative gain - dampens oscillations (crucial for stability)
+        .with_output_limits(0.0, 100.0)  // Thrust percentage (0-100%)
+        .with_setpoint(SETPOINT_ALTITUDE)
+        .with_deadband(0.0)  // Set deadband to zero for exact tracking to setpoint
+        .with_anti_windup(true);  // Prevent integral term accumulation when saturated
 
     let controller = ThreadSafePidController::new(config);
 
@@ -74,7 +75,7 @@ fn main() {
 
     println!("Drone Altitude Control Simulation");
     println!("=================================");
-    println!("Target altitude: {:.1} meters", SETPOINT_ALTITUDE_METERS);
+    println!("Target altitude: {:.1} meters", SETPOINT_ALTITUDE);
     println!("Drone mass: {:.1} kg", drone_mass);
     println!("Max thrust: {:.1} N", max_thrust);
     println!(
@@ -151,7 +152,7 @@ fn main() {
         // Print status approximately every half second
         if time_step % (CONTROL_RATE_HZ as usize / 2) == 0 {
             // Calculate error for display (setpoint - process_value)
-            let error = SETPOINT_ALTITUDE_METERS - altitude;
+            let error = SETPOINT_ALTITUDE - altitude;
 
             println!(
                 "{:6.1} | {:11.2} | {:13.2} | {:9.1} | {:8.2} | {}",
