@@ -13,10 +13,10 @@ const DT: f64 = 1.0 / CONTROL_RATE_HZ; // Time step in seconds
 const SETPOINT_ALTITUDE: f64 = 10.0; // Target altitude in meters
 
 // Visualization constants
-const PLOT_WIDTH: usize = 100;      // Width of the plot area (columns)
-const PLOT_HEIGHT: usize = 30;      // Height of the plot area (rows) - increased
-const REFRESH_RATE: usize = 2;      // How many simulation steps between display updates
-const TIME_WINDOW: f64 = 60.0;      // Time window to display in seconds
+const PLOT_WIDTH: usize = 140;     // Total width of all plots (columns)
+const PLOT_HEIGHT: usize = 60;     // Total height of all plots (rows)
+const REFRESH_RATE: usize = 2;     // How many simulation steps between display updates
+const TIME_WINDOW: f64 = 60.0;     // Time window to display in seconds
 const POINTS_PER_WINDOW: usize = 80; // Number of data points to show in the window
 
 // Wind gust simulation constants
@@ -227,12 +227,11 @@ fn main() {
             println!("║ Condition: {:<18} ║", drone_condition);
             println!("╚════════════════════════════════╝");
             
-            // Plot with time window
-            println!("Plot showing last {:.1} seconds of data:", visible_time_window);
-            println!("Legend: \x1B[33m●\x1B[0m Altitude(m) | \x1B[34m●\x1B[0m Velocity(m/s) | \x1B[31m●\x1B[0m Thrust(%) | \x1B[32m●\x1B[0m Error(m)");
+            // Plot multiple charts showing last TIME_WINDOW seconds of data
+            println!("Plots showing last {:.1} seconds of data:", visible_time_window);
             
-            // Generate improved ASCII plot
-            plot_ascii_chart(
+            // Create 2x2 grid of plots
+            plot_multi_charts(
                 &time_history[window_start..=time_step],
                 &altitude_history[window_start..=time_step],
                 &velocity_history[window_start..=time_step],
@@ -268,296 +267,140 @@ fn main() {
     println!("✓ Thread-safety enables integration with complex robotic systems");
 }
 
-/// Plots multiple time series data as an ASCII chart with improved scales and layout
-fn plot_ascii_chart(
+/// Creates a 2x2 grid of charts for different metrics
+fn plot_multi_charts(
     time_data: &[f64],
     altitude_data: &[f64],
     velocity_data: &[f64],
     thrust_data: &[f64],
     error_data: &[f64],
     condition_data: &[String],
-    width: usize,
-    height: usize,
+    total_width: usize,
+    total_height: usize,
 ) {
-    // Ensure we have valid data
-    if time_data.is_empty() || altitude_data.is_empty() {
-        println!("No data to plot");
-        return;
-    }
-
-    // Define value ranges for scaling
-    let alt_min = 0.0;
-    let alt_max = 15.0;
-    let vel_min = -5.0;
-    let vel_max = 5.0;
-    let thrust_min = 0.0;
-    let thrust_max = 100.0;
-    let error_min = -5.0;
-    let error_max = 5.0;
+    // Calculate dimensions for each chart
+    let chart_width = total_width / 2; // Half the total width
+    let chart_height = total_height / 2; // Half the total height
     
-    // Time range
+    // Create buffers for each chart
+    let mut buffer = vec![vec![' '; total_width]; total_height];
+    
+    // Time range (same for all charts)
     let time_min = *time_data.first().unwrap();
     let time_max = *time_data.last().unwrap();
-    let time_range = time_max - time_min;
     
-    // Adjust plot dimensions to account for axes and labels
-    let plot_width = width - 10;      // Reserve space for y-axis labels
-    let plot_height = height - 5;     // Reserve space for x-axis labels
-    let y_axis_offset = 10;           // X position where the y-axis starts
+    // Draw the four charts
+    // Upper left: Altitude
+    draw_single_chart(
+        &mut buffer,
+        time_data,
+        altitude_data,
+        time_min,
+        time_max,
+        0.0, 15.0,
+        0, 0,
+        chart_width,
+        chart_height,
+        "Altitude (m)",
+        '●',
+        '━',
+        Some(SETPOINT_ALTITUDE),
+        "\x1B[33m", // Yellow
+    );
     
-    // Build the plot area - initially fill with spaces
-    let mut plot = vec![vec![' '; width]; height];
+    // Upper right: Velocity
+    draw_single_chart(
+        &mut buffer,
+        time_data,
+        velocity_data,
+        time_min,
+        time_max,
+        -5.0, 5.0,
+        chart_width, 0,
+        chart_width,
+        chart_height,
+        "Velocity (m/s)",
+        '◆',
+        '╌',
+        Some(0.0), // Zero line
+        "\x1B[34m", // Blue
+    );
     
-    // Draw borders around the plot
-    // Top and bottom borders
-    for x in y_axis_offset-1..y_axis_offset+plot_width {
-        plot[0][x] = '─';
-        plot[plot_height+1][x] = '─';
-    }
+    // Lower left: Thrust
+    draw_single_chart(
+        &mut buffer,
+        time_data,
+        thrust_data,
+        time_min,
+        time_max,
+        0.0, 100.0,
+        0, chart_height,
+        chart_width,
+        chart_height,
+        "Thrust (%)",
+        '■',
+        '┄',
+        None,
+        "\x1B[31m", // Red
+    );
     
-    // Left and right borders
-    for y in 0..plot_height+2 {
-        plot[y][y_axis_offset-1] = '│';
-        plot[y][y_axis_offset+plot_width-1] = '│';
-    }
+    // Lower right: Error
+    draw_single_chart(
+        &mut buffer,
+        time_data,
+        error_data,
+        time_min,
+        time_max,
+        -5.0, 5.0,
+        chart_width, chart_height,
+        chart_width,
+        chart_height,
+        "Error (m)",
+        '▲',
+        '┆',
+        Some(0.0), // Zero line
+        "\x1B[32m", // Green
+    );
     
-    // Draw corners
-    plot[0][y_axis_offset-1] = '┌';
-    plot[0][y_axis_offset+plot_width-1] = '┐';
-    plot[plot_height+1][y_axis_offset-1] = '└';
-    plot[plot_height+1][y_axis_offset+plot_width-1] = '┘';
-    
-    // Draw setpoint line (target altitude)
-    let setpoint_y = plot_height - ((SETPOINT_ALTITUDE - alt_min) / (alt_max - alt_min) * plot_height as f64) as usize;
-    for x in y_axis_offset..y_axis_offset+plot_width {
-        if setpoint_y > 0 && setpoint_y < plot_height && x < width {
-            if plot[setpoint_y][x] == ' ' {
-                plot[setpoint_y][x] = '·';
-            }
-        }
-    }
-    
-    // Add Y-axis scale (for altitude)
-    let y_scales = [
-        (0.0, "0m"),
-        (5.0, "5m"),
-        (10.0, "10m"),
-        (15.0, "15m"),
-    ];
-    
-    for (value, label) in y_scales.iter() {
-        let y = plot_height - ((*value - alt_min) / (alt_max - alt_min) * plot_height as f64) as usize;
-        if y < plot_height {
-            // Draw horizontal tick
-            plot[y][y_axis_offset-1] = '├';
-            
-            // Write label
-            let label_chars: Vec<char> = label.chars().collect();
-            for (i, ch) in label_chars.iter().enumerate() {
-                if i < y_axis_offset - 1 {
-                    plot[y][i] = *ch;
-                }
-            }
-        }
-    }
-    
-    // Add X-axis scale (time)
-    let time_steps = 5;  // Number of time markers
-    let time_step = time_range / time_steps as f64;
-    
-    for i in 0..=time_steps {
-        let time_val = time_min + i as f64 * time_step;
-        let x = y_axis_offset + (i as f64 * plot_width as f64 / time_steps as f64) as usize;
-        
-        // Draw vertical tick
-        if x < y_axis_offset + plot_width {
-            plot[plot_height+1][x] = '┬';
-            
-            // Write time label
-            let label = format!("{:.1}s", time_val);
-            for (j, ch) in label.chars().enumerate() {
-                if plot_height + 2 + j < height && x + j - 2 < width {
-                    plot[plot_height + 2 + j/label.len()][x + j % label.len() - 2] = ch;
-                }
-            }
-        }
-    }
-    
-    // Add zero line for velocity and error
-    let zero_y = plot_height - ((0.0 - vel_min) / (vel_max - vel_min) * plot_height as f64) as usize;
-    if zero_y > 0 && zero_y < plot_height {
-        for x in y_axis_offset..y_axis_offset+plot_width {
-            if plot[zero_y][x] == ' ' {
-                plot[zero_y][x] = '·';
-            }
-        }
-    }
-    
-    // Add grid lines
-    for y in 1..plot_height {
-        if y % 5 == 0 {
-            for x in y_axis_offset..y_axis_offset+plot_width {
-                if plot[y][x] == ' ' {
-                    plot[y][x] = '·';
-                }
-            }
-        }
-    }
-    
-    for x in y_axis_offset..y_axis_offset+plot_width {
-        if (x - y_axis_offset) % (plot_width / 10) == 0 {
-            for y in 1..plot_height {
-                if plot[y][x] == ' ' {
-                    plot[y][x] = '·';
-                }
-            }
-        }
-    }
-    
-    // Plot the data - sample across the full time range 
-    let data_len = time_data.len();
-    let x_scale = plot_width as f64 / time_range;
-    
-    // Altitude
-    let mut alt_prev_x = None;
-    let mut alt_prev_y = None;
-    for i in 0..data_len {
-        let altitude = altitude_data[i];
-        if altitude >= alt_min && altitude <= alt_max {
+    // Mark notable events as vertical lines across all charts
+    for i in 0..time_data.len() {
+        let condition = &condition_data[i];
+        if condition.contains("WIND GUST") || condition.contains("PAYLOAD DROP") {
+            // Calculate x position based on time
+            let time_range = time_max - time_min;
             let time = time_data[i];
-            let x = y_axis_offset + ((time - time_min) * x_scale) as usize;
-            let y = plot_height - ((altitude - alt_min) / (alt_max - alt_min) * plot_height as f64) as usize;
+            let x_percent = (time - time_min) / time_range;
             
-            if x < y_axis_offset + plot_width && y < plot_height {
-                // Draw point
-                plot[y][x] = '●';
-                
-                // Connect with line if we have a previous point
-                if let (Some(prev_x), Some(prev_y)) = (alt_prev_x, alt_prev_y) {
-                    draw_line(&mut plot, prev_x, prev_y, x, y, '━');
+            // Draw vertical lines on all charts
+            for chart_row in 0..2 {
+                for chart_col in 0..2 {
+                    let chart_x_offset = chart_col * chart_width;
+                    let chart_y_offset = chart_row * chart_height;
+                    
+                    // Adjust for axes
+                    let y_axis_offset = 10;
+                    let plot_width = chart_width - 15;
+                    
+                    // Calculate x position in this chart
+                    let x = chart_x_offset + y_axis_offset + (x_percent * plot_width as f64) as usize;
+                    
+                    // Draw vertical marker
+                    for y in chart_y_offset + 1..chart_y_offset + chart_height - 5 {
+                        if y < total_height && x < total_width {
+                            if buffer[y][x] == ' ' || buffer[y][x] == '·' {
+                                buffer[y][x] = '!';
+                            }
+                        }
+                    }
                 }
-                
-                alt_prev_x = Some(x);
-                alt_prev_y = Some(y);
             }
         }
     }
     
-    // Velocity
-    let mut vel_prev_x = None;
-    let mut vel_prev_y = None;
-    for i in 0..data_len {
-        let velocity = velocity_data[i];
-        if velocity >= vel_min && velocity <= vel_max {
-            let time = time_data[i];
-            let x = y_axis_offset + ((time - time_min) * x_scale) as usize;
-            let y = plot_height - ((velocity - vel_min) / (vel_max - vel_min) * plot_height as f64) as usize;
-            
-            if x < y_axis_offset + plot_width && y < plot_height && plot[y][x] != '●' {
-                // Draw point
-                plot[y][x] = '◆';
-                
-                // Connect with line if we have a previous point
-                if let (Some(prev_x), Some(prev_y)) = (vel_prev_x, vel_prev_y) {
-                    draw_line(&mut plot, prev_x, prev_y, x, y, '╌');
-                }
-                
-                vel_prev_x = Some(x);
-                vel_prev_y = Some(y);
-            }
-        }
-    }
-    
-    // Thrust
-    let mut thrust_prev_x = None;
-    let mut thrust_prev_y = None;
-    for i in 0..data_len {
-        let thrust = thrust_data[i];
-        if thrust >= thrust_min && thrust <= thrust_max {
-            let time = time_data[i];
-            let x = y_axis_offset + ((time - time_min) * x_scale) as usize;
-            let y = plot_height - ((thrust - thrust_min) / (thrust_max - thrust_min) * plot_height as f64) as usize;
-            
-            if x < y_axis_offset + plot_width && y < plot_height && plot[y][x] != '●' && plot[y][x] != '◆' {
-                // Draw point
-                plot[y][x] = '■';
-                
-                // Connect with line if we have a previous point
-                if let (Some(prev_x), Some(prev_y)) = (thrust_prev_x, thrust_prev_y) {
-                    draw_line(&mut plot, prev_x, prev_y, x, y, '┄');
-                }
-                
-                thrust_prev_x = Some(x);
-                thrust_prev_y = Some(y);
-            }
-        }
-    }
-    
-    // Error
-    let mut err_prev_x = None;
-    let mut err_prev_y = None;
-    for i in 0..data_len {
-        let error = error_data[i];
-        if error >= error_min && error <= error_max {
-            let time = time_data[i];
-            let x = y_axis_offset + ((time - time_min) * x_scale) as usize;
-            let y = plot_height - ((error - error_min) / (error_max - error_min) * plot_height as f64) as usize;
-            
-            if x < y_axis_offset + plot_width && y < plot_height && plot[y][x] != '●' && plot[y][x] != '◆' && plot[y][x] != '■' {
-                // Draw point
-                plot[y][x] = '▲';
-                
-                // Connect with line if we have a previous point
-                if let (Some(prev_x), Some(prev_y)) = (err_prev_x, err_prev_y) {
-                    draw_line(&mut plot, prev_x, prev_y, x, y, '┆');
-                }
-                
-                err_prev_x = Some(x);
-                err_prev_y = Some(y);
-            }
-        }
-    }
-    
-    // Mark notable events with exclamation marks
-    for i in 0..data_len {
-        let time = time_data[i];
-        let x = y_axis_offset + ((time - time_min) * x_scale) as usize;
-        
-        if x < y_axis_offset + plot_width {
-            let condition = &condition_data[i];
-            if condition.contains("WIND GUST") || condition.contains("PAYLOAD DROP") {
-                plot[0][x] = '!';
-            }
-        }
-    }
-    
-    // Add Y-axis title
-    let y_label = "Altitude (m)";
-    for (i, ch) in y_label.chars().enumerate() {
-        if i < plot_height {
-            plot[i + 2][0] = ch;
-        }
-    }
-    
-    // Add X-axis title
-    let x_label = "Time (s)";
-    for (i, ch) in x_label.chars().enumerate() {
-        if y_axis_offset + plot_width/2 - x_label.len()/2 + i < width {
-            plot[plot_height + 3][y_axis_offset + plot_width/2 - x_label.len()/2 + i] = ch;
-        }
-    }
-    
-    // Add scale information
-    println!("Scale:");
-    println!("  \x1B[33m●\x1B[0m Altitude: {:.1}-{:.1}m    \x1B[34m◆\x1B[0m Velocity: {:.1}-{:.1}m/s", 
-             alt_min, alt_max, vel_min, vel_max);
-    println!("  \x1B[31m■\x1B[0m Thrust:   {:.1}-{:.1}%    \x1B[32m▲\x1B[0m Error:    {:.1}-{:.1}m", 
-             thrust_min, thrust_max, error_min, error_max);
-    
-    // Print the plot using ANSI colors
-    for y in 0..height {
-        for x in 0..width {
-            match plot[y][x] {
+    // Print the entire buffer with colors
+    for y in 0..total_height {
+        for x in 0..total_width {
+            match buffer[y][x] {
                 '●' => print!("\x1B[33m●\x1B[0m"), // Yellow for Altitude
                 '◆' => print!("\x1B[34m◆\x1B[0m"), // Blue for Velocity
                 '■' => print!("\x1B[31m■\x1B[0m"), // Red for Thrust
@@ -567,10 +410,179 @@ fn plot_ascii_chart(
                 '┄' => print!("\x1B[31m┄\x1B[0m"), // Red line for Thrust
                 '┆' => print!("\x1B[32m┆\x1B[0m"), // Green line for Error
                 '!' => print!("\x1B[1;31m!\x1B[0m"), // Bright red for events
-                _ => print!("{}", plot[y][x]),
+                _ => print!("{}", buffer[y][x]),
             }
         }
         println!();
+    }
+}
+
+/// Draw a single chart for one metric
+fn draw_single_chart(
+    buffer: &mut Vec<Vec<char>>,
+    time_data: &[f64],
+    value_data: &[f64],
+    time_min: f64,
+    time_max: f64,
+    value_min: f64,
+    value_max: f64,
+    x_offset: usize,
+    y_offset: usize,
+    width: usize,
+    height: usize,
+    title: &str,
+    point_char: char,
+    line_char: char,
+    reference_line: Option<f64>,
+    color_code: &str,
+) {
+    // Adjust plot dimensions to account for axes and labels
+    let plot_width = width - 15;       // Reserve space for y-axis labels
+    let plot_height = height - 5;      // Reserve space for x-axis labels
+    let y_axis_offset = 10;            // X position where the y-axis starts
+    
+    // Time range
+    let time_range = time_max - time_min;
+    
+    // Draw borders
+    // Top and bottom borders
+    for x in (x_offset + y_axis_offset - 1)..(x_offset + y_axis_offset + plot_width) {
+        if x < buffer[0].len() {
+            buffer[y_offset][x] = '─';
+            buffer[y_offset + plot_height + 1][x] = '─';
+        }
+    }
+    
+    // Left and right borders
+    for y in y_offset..(y_offset + plot_height + 2) {
+        if y < buffer.len() {
+            buffer[y][x_offset + y_axis_offset - 1] = '│';
+            if x_offset + y_axis_offset + plot_width - 1 < buffer[0].len() {
+                buffer[y][x_offset + y_axis_offset + plot_width - 1] = '│';
+            }
+        }
+    }
+    
+    // Draw corners
+    if y_offset < buffer.len() && x_offset + y_axis_offset - 1 < buffer[0].len() {
+        buffer[y_offset][x_offset + y_axis_offset - 1] = '┌';
+    }
+    if y_offset < buffer.len() && x_offset + y_axis_offset + plot_width - 1 < buffer[0].len() {
+        buffer[y_offset][x_offset + y_axis_offset + plot_width - 1] = '┐';
+    }
+    if y_offset + plot_height + 1 < buffer.len() && x_offset + y_axis_offset - 1 < buffer[0].len() {
+        buffer[y_offset + plot_height + 1][x_offset + y_axis_offset - 1] = '└';
+    }
+    if y_offset + plot_height + 1 < buffer.len() && x_offset + y_axis_offset + plot_width - 1 < buffer[0].len() {
+        buffer[y_offset + plot_height + 1][x_offset + y_axis_offset + plot_width - 1] = '┘';
+    }
+    
+    // Draw title at the top
+    for (i, ch) in title.chars().enumerate() {
+        let x = x_offset + y_axis_offset + (plot_width / 2) - (title.len() / 2) + i;
+        if y_offset > 0 && x < buffer[0].len() {
+            buffer[y_offset - 1][x] = ch;
+        }
+    }
+    
+    // Draw reference line if provided
+    if let Some(ref_value) = reference_line {
+        let ref_y = y_offset + plot_height - ((ref_value - value_min) / (value_max - value_min) * plot_height as f64) as usize;
+        for x in (x_offset + y_axis_offset)..(x_offset + y_axis_offset + plot_width) {
+            if ref_y < buffer.len() && x < buffer[0].len() && ref_y > y_offset {
+                if buffer[ref_y][x] == ' ' {
+                    buffer[ref_y][x] = '·';
+                }
+            }
+        }
+    }
+    
+    // Add Y-axis scale
+    let y_tick_count = 5;
+    let y_tick_step = (value_max - value_min) / (y_tick_count as f64);
+    
+    for i in 0..=y_tick_count {
+        let value = value_min + i as f64 * y_tick_step;
+        let y = y_offset + plot_height - ((value - value_min) / (value_max - value_min) * plot_height as f64) as usize;
+        
+        if y < buffer.len() {
+            // Draw horizontal tick
+            if x_offset + y_axis_offset - 1 < buffer[0].len() {
+                buffer[y][x_offset + y_axis_offset - 1] = '├';
+            }
+            
+            // Write label
+            let label = format!("{:5.1}", value);
+            for (j, ch) in label.chars().enumerate() {
+                if x_offset + j < buffer[0].len() && x_offset + j < x_offset + y_axis_offset - 1 {
+                    buffer[y][x_offset + j] = ch;
+                }
+            }
+        }
+    }
+    
+    // Add X-axis scale (time)
+    let x_tick_count = 4;
+    let x_tick_step = time_range / (x_tick_count as f64);
+    
+    for i in 0..=x_tick_count {
+        let time_val = time_min + i as f64 * x_tick_step;
+        let x = x_offset + y_axis_offset + (i as f64 * plot_width as f64 / x_tick_count as f64) as usize;
+        
+        if x < buffer[0].len() && y_offset + plot_height + 1 < buffer.len() {
+            // Draw vertical tick
+            buffer[y_offset + plot_height + 1][x] = '┬';
+            
+            // Write time label
+            let label = format!("{:.1}s", time_val);
+            for (j, ch) in label.chars().enumerate() {
+                if y_offset + plot_height + 2 + j/label.len() < buffer.len() && 
+                   x + j % label.len() - 1 < buffer[0].len() {
+                    buffer[y_offset + plot_height + 2 + j/label.len()][x + j % label.len() - 1] = ch;
+                }
+            }
+        }
+    }
+    
+    // Add grid lines
+    for y in (y_offset + 1)..(y_offset + plot_height) {
+        if y % 5 == 0 {
+            for x in (x_offset + y_axis_offset)..(x_offset + y_axis_offset + plot_width) {
+                if y < buffer.len() && x < buffer[0].len() {
+                    if buffer[y][x] == ' ' {
+                        buffer[y][x] = '·';
+                    }
+                }
+            }
+        }
+    }
+    
+    // Plot the data
+    let x_scale = plot_width as f64 / time_range;
+    
+    let mut prev_x = None;
+    let mut prev_y = None;
+    
+    for i in 0..time_data.len() {
+        let value = value_data[i];
+        if value >= value_min && value <= value_max {
+            let time = time_data[i];
+            let x = x_offset + y_axis_offset + ((time - time_min) * x_scale) as usize;
+            let y = y_offset + plot_height - ((value - value_min) / (value_max - value_min) * plot_height as f64) as usize;
+            
+            if y < buffer.len() && x < buffer[0].len() {
+                // Draw point
+                buffer[y][x] = point_char;
+                
+                // Connect with line if we have a previous point
+                if let (Some(px), Some(py)) = (prev_x, prev_y) {
+                    draw_line(buffer, px, py, x, y, line_char);
+                }
+                
+                prev_x = Some(x);
+                prev_y = Some(y);
+            }
+        }
     }
 }
 
