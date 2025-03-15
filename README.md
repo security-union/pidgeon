@@ -4,7 +4,7 @@
   <img src="pidgeon.jpeg" alt="Pidgeon Logo" width="200"/>
 </p>
 
-## Delivering Rock-Solid Performance Since 2024 - No War Zone Required
+## Delivering Rock-Solid Performance Since 2025 - No War Zone Required
 
 [![CI](https://github.com/security-union/pidgeon/actions/workflows/ci.yml/badge.svg)](https://github.com/security-union/pidgeon/actions/workflows/ci.yml)
 
@@ -24,7 +24,7 @@ Pidgeon is designed for developers who need a robust, high-performance PID contr
 - **High-performance**: With sub-microsecond computation times, perfect for real-time robotics and drone applications requiring 1kHz+ control loops.
 - **Use case agnostic**: From quadcopter stabilization to temperature control to maintaining optimal coffee-to-code ratios, Pidgeon doesn't judge your control theory applications.
 - **Written in Rust**: Memory safety without garbage collection, because who needs garbage when you've got ownership?
-- **Minimal dependencies**: Doesn't pull in half of npm or require weekly security patches.
+- **Minimal dependencies**: Doesn't pull in half of crates.io.
 
 ## Quick Start
 
