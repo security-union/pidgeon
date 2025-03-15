@@ -422,10 +422,13 @@ fn plot_multi_charts(
                         chart_x_offset + y_axis_offset + (x_percent * plot_width as f64) as usize;
 
                     // Draw vertical marker
-                    for (y, row) in buffer.iter_mut().enumerate().take(chart_y_offset + chart_height - 5).skip(chart_y_offset + 1) {
-                        if y < total_height
-                            && x < total_width
-                            && (row[x] == ' ' || row[x] == '·')
+                    for (y, row) in buffer
+                        .iter_mut()
+                        .enumerate()
+                        .take(chart_y_offset + chart_height - 5)
+                        .skip(chart_y_offset + 1)
+                    {
+                        if y < total_height && x < total_width && (row[x] == ' ' || row[x] == '·')
                         {
                             row[x] = '!';
                         }
