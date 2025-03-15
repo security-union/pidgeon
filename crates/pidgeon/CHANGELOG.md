@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/security-union/pidgeon/compare/pidgeon-v0.2.0...pidgeon-v0.2.1) - 2025-03-15
+
+### Other
+
+- handle unwrap() properly using Result<T, PidError> ([#15](https://github.com/security-union/pidgeon/pull/15))
+
 ## [0.2.0](https://github.com/security-union/pidgeon/compare/pidgeon-v0.1.1...pidgeon-v0.2.0) - 2025-03-09
 
 ### Other
