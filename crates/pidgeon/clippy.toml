@@ -1,0 +1,2 @@
+# .clippy.toml
+too-many-arguments-threshold = 15

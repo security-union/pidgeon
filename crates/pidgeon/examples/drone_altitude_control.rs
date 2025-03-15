@@ -65,7 +65,7 @@ fn main() {
     // Initial conditions
     let mut altitude = 0.0; // Starting on the ground
     let mut velocity: f64 = 0.0; // Initial vertical velocity
-    let mut thrust = 0.0; // Initial thrust
+    let mut thrust; // Initial thrust
     let mut commanded_thrust = 0.0; // Commanded thrust from PID
 
     // Data history for plotting - using ring buffers
@@ -422,12 +422,12 @@ fn plot_multi_charts(
                         chart_x_offset + y_axis_offset + (x_percent * plot_width as f64) as usize;
 
                     // Draw vertical marker
-                    for y in chart_y_offset + 1..chart_y_offset + chart_height - 5 {
+                    for (y, row) in buffer.iter_mut().enumerate().take(chart_y_offset + chart_height - 5).skip(chart_y_offset + 1) {
                         if y < total_height
                             && x < total_width
-                            && (buffer[y][x] == ' ' || buffer[y][x] == '·')
+                            && (row[x] == ' ' || row[x] == '·')
                         {
-                            buffer[y][x] = '!';
+                            row[x] = '!';
                         }
                     }
                 }
