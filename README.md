@@ -12,11 +12,11 @@
 
 Pidgeon is a high-performance, thread-safe PID controller library written in Rust. Unlike actual pigeons that poop on your freshly washed car, this Pidgeon delivers precisely controlled outputs without any messy side effects.
 
-The name pays homage to history's most battle-tested messengers. In both World Wars, carrier pigeons maintained 98% delivery rates while flying through artillery barrages, poison gas, and enemy lines. Cher Ami, a famous war pidgeon, delivered a critical message despite losing a leg, an eye, and being shot through the chest. Like these feathered veterans, our PID controller is engineered to perform reliably when everything else fails. It might not win the Croix de Guerre like Cher Ami did, but it'll survive your chaotic production environment with the same unflappable determination.
+The name pays homage to history's most battle-tested messengers. In both World Wars, carrier pigeons maintained 95% delivery rates [^1] while flying through artillery barrages, poison gas, and enemy lines. Cher Ami, a famous war pidgeon, delivered a critical message despite losing a leg, an eye, and being shot through the chest. Like these feathered veterans, our PID controller is engineered to perform reliably when everything else fails. It might not win the Croix de Guerre like Cher Ami did, but it'll survive your chaotic production environment with the same unflappable determination.
 
 ## Why Pidgeon?
 
-Because while Google has advanced AI systems that can recognize cats in YouTube videos, sometimes you just need a reliable PID controller that doesn't require a PhD in machine learning or a fleet of TPUs to operate.
+Pidgeon is designed for developers who need a robust, high-performance PID controller for real-time control applications. Whether you're building a drone, a robot, or a smart thermostat, Pidgeon provides the precision and reliability you need to keep your system on track.
 
 ## Features
 
@@ -317,4 +317,9 @@ PID controllers remain ubiquitous for several reasons:
 While more advanced control algorithms exist (model predictive control, adaptive control, fuzzy logic), PID control often provides the best balance of performance, complexity, and reliability.
 
 In the words of control theorist Karl Åström: "PID control is an important technology that has survived many changes in technology, from mechanics and pneumatics to microprocessors via electronic tubes, transistors, integrated circuits."
+
+### References
+
+[^1] In the Era of Electronic Warfare, Bring Back Pigeons
+ [warontherocks.com](https://warontherocks.com/2019/01/in-the-era-of-electronic-warfare-bring-back-pigeons/#:~:text=Pigeons%20demonstrated%20reliability%20as%20messengers,message%20rates%20at%2099%20percent.)
 
