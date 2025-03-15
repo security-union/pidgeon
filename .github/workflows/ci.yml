@@ -40,7 +40,7 @@ jobs:
         run: |
           for example in $(cargo metadata --format-version=1 | jq -r '.packages[] | select(.name == "pidgeon") | .targets[] | select(.kind[] == "example") | .name'); do
             echo "Compiling example: $example"
-            cargo build --example "$example" --features=["debugging"]
+            cargo build --example "$example" --features="debugging"
           done
 
   lints:
