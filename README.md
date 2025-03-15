@@ -10,7 +10,7 @@
 
 ## What is Pidgeon?
 
-Pidgeon is a high-performance, thread-safe PID controller library written in Rust. Unlike actual pigeons that poop on your freshly washed car, this Pidgeon delivers precisely controlled outputs without any messy side effects.
+Pidgeon is a high-performance, thread-safe PID controller library written in Rust.
 
 The name pays homage to history's most battle-tested messengers. In both World Wars, carrier pigeons maintained 95% delivery rates [^1] while flying through artillery barrages, poison gas, and enemy lines. Cher Ami, a famous war pidgeon, delivered a critical message despite losing a leg, an eye, and being shot through the chest. Like these feathered veterans, our PID controller is engineered to perform reliably when everything else fails. It might not win the Croix de Guerre like Cher Ami did, but it'll survive your chaotic production environment with the same unflappable determination.
 
@@ -20,7 +20,7 @@ Pidgeon is designed for developers who need a robust, high-performance PID contr
 
 ## Features
 
-- **Thread-safe**: Unlike that "concurrent" Java code you wrote during your internship, Pidgeon won't race your conditions.
+- **Thread-safe**: ThreadSafePidController ensures safe concurrent access to your PID controller, perfect for multi-threaded applications, it implements the `Clone` trait so that you can easily share the controller across threads.
 - **High-performance**: With sub-microsecond computation times, perfect for real-time robotics and drone applications requiring 1kHz+ control loops.
 - **Use case agnostic**: From quadcopter stabilization to temperature control to maintaining optimal coffee-to-code ratios, Pidgeon doesn't judge your control theory applications.
 - **Written in Rust**: Memory safety without garbage collection, because who needs garbage when you've got ownership?
@@ -30,14 +30,15 @@ Pidgeon is designed for developers who need a robust, high-performance PID contr
 
 ### Basic Drone Stabilization Example
 
-```
+```bash
 cargo run --example drone_altitude_control
 ```
+
 <p align="center">
     <video src="https://github.com/user-attachments/assets/ba0cf3f6-d61b-4323-bed1-c9be2dbeb851"  width="600"></video>
 </p>
 
-#### About the Drone Altitude Simulation
+#### Drone Altitude Simulation
 
 The visualization above shows our PID controller in action, maintaining a quadcopter's altitude despite various disturbances. This simulator models real-world drone physics including:
 
@@ -86,14 +87,6 @@ fn main() {
 }
 ```
 
-## FAQ
-
-**Q: Is this better than the PID controller I wrote in my CS controls class?**  
-**A:** Yes, unless you're that one person who actually understood eigenvalues.
-
-**Q: Why is it called Pidgeon?**  
-**A:** Because "CarrierPidgeon" was too long, and like the bird, this library delivers... but with better spelling.
-
 ## License
 
 Pidgeon is licensed under either of:
@@ -109,38 +102,15 @@ Unless you explicitly state otherwise, any contribution intentionally submitted 
 
 ## Performance Benchmarks
 
-Pidgeon is designed for high-performance control applications. Below are benchmark results showing how the library performs in different scenarios:
+Pidgeon is designed for high-performance control applications:
 
-| Benchmark               | Time (ns)       | Operations/sec | Description                                                        |
-|-------------------------|-----------------|----------------|--------------------------------------------------------------------|
-| `pid_compute`           | 394.23 ns       | 2,536,590/s    | Single-threaded PID controller processing 100 consecutive updates |
-| `thread_safe_pid_compute` | 673.21 ns     | 1,485,420/s    | Thread-safe PID controller without concurrent access               |
-| `multi_threaded_pid`    | 26,144 ns       | 38,250/s       | Concurrent access with one thread updating and another reading     |
-
-### What Each Benchmark Measures
-
-1. **pid_compute**:
-   - Tests the raw performance of the non-thread-safe `PidController`
-   - Represents the absolute fastest performance possible
-   - Ideal for single-threaded applications or embedded systems with limited resources
-
-2. **thread_safe_pid_compute**:
-   - Measures the overhead introduced by the thread-safe wrapper
-   - Uses the `ThreadSafePidController` but without actual concurrent access
-   - Approximately 70% slower than the non-thread-safe version due to mutex overhead
-   - Provides a good balance of safety and performance for most applications
-
-3. **multi_threaded_pid**:
-   - Simulates a real-world scenario with concurrent access
-   - One thread continuously updates the controller with new errors
-   - Another thread reads the control signal in parallel
-   - Demonstrates thread contention effects in a realistic use case
-
-These benchmarks show that while thread-safety introduces some overhead, Pidgeon remains highly efficient for real-time control applications. A single controller can comfortably handle update rates of 1 MHz in single-threaded mode or 30-40 kHz in a heavily multi-threaded environment.
+| Benchmark               | Time (ns)       | Operations/sec | Description                                                      |
+|-------------------------|-----------------|----------------|------------------------------------------------------------------|
+| `pid_compute`           | 394.23 ns       | 2,536,590/s    | Single-threaded processing of 100 consecutive updates           |
+| `thread_safe_pid_compute` | 673.21 ns     | 1,485,420/s    | Thread-safe controller without concurrent access                 |
+| `multi_threaded_pid`    | 26,144 ns       | 38,250/s       | Concurrent access with updating and reading threads              |
 
 ### Running Benchmarks
-
-To run these benchmarks yourself:
 
 ```bash
 cargo bench --package pidgeon --features benchmarks
@@ -176,10 +146,9 @@ The web-based interface allows you to observe the PID controller's performance a
 
 ## Debugging Features
 
-Why spend hours with printf debugging when Pidgeon can tell you exactly what's going wrong? Our advanced debugging features turn PID tuning from black magic into actual engineering:
+Pidgeon provides comprehensive debugging capabilities to assist with controller tuning and analysis:
 
-- **Automatic Gain Suggestion**: Pidgeon analyzes your system's response and suggests improved PID gains
-- **Stability Analysis**: Get warnings when your configuration might lead to instability
+
 - **Performance Metrics**: Real-time calculation of rise time, settling time, overshoot, and steady-state error
 - **Response Visualization**: Export control data to view beautiful Bode plots without leaving your terminal
 - **Gain Scheduling Detection**: Automatically detects when your system would benefit from gain scheduling
@@ -192,7 +161,7 @@ Enable debugging by adding the `debugging` feature to your Cargo.toml:
 pidgeon = { version = "1.0", features = ["debugging"] }
 ```
 
-Then configure your controller with the debugging capabilities:
+Configuration example:
 
 ```rust
 use pidgeon::{ControllerConfig, ThreadSafePidController, DebugConfig};
@@ -323,3 +292,4 @@ In the words of control theorist Karl Åström: "PID control is an important tec
 [^1] In the Era of Electronic Warfare, Bring Back Pigeons
  [warontherocks.com](https://warontherocks.com/2019/01/in-the-era-of-electronic-warfare-bring-back-pigeons/#:~:text=Pigeons%20demonstrated%20reliability%20as%20messengers,message%20rates%20at%2099%20percent.)
 
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
