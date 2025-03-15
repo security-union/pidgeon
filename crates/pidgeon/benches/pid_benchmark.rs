@@ -32,7 +32,11 @@ fn benchmark_pid_controller(c: &mut Criterion) {
             for i in 0..100 {
                 let error = black_box(10.0 - (i as f64 * 0.1));
                 let dt = black_box(0.01);
-                black_box(thread_safe_controller.compute(error, dt));
+                black_box(
+                    thread_safe_controller
+                        .compute(error, dt)
+                        .expect("Failed to compute"),
+                );
             }
         })
     });
@@ -47,14 +51,18 @@ fn benchmark_pid_controller(c: &mut Criterion) {
             let update_thread = thread::spawn(move || {
                 for i in 0..50 {
                     let error = 10.0 - (i as f64 * 0.1);
-                    controller_clone.compute(error, 0.01);
+                    controller_clone
+                        .compute(error, 0.01)
+                        .expect("Failed to compute");
                 }
             });
 
             // Thread that reads control signals
             let read_thread = thread::spawn(move || {
                 for _ in 0..20 {
-                    let _ = controller.get_control_signal();
+                    let _ = controller
+                        .get_control_signal()
+                        .expect("Failed to get control signal");
                 }
             });
 

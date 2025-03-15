@@ -32,6 +32,11 @@ fn main() {
     let room_thermal_mass = 5000.0; // J/°C - thermal mass of the room
     let hvac_power = 2000.0; // W - maximum heating/cooling power
 
+    // Set the target temperature
+    controller
+        .set_setpoint(setpoint)
+        .expect("Failed to set setpoint");
+
     println!("HVAC Temperature Control Simulation");
     println!("===================================");
     println!("Target temperature: {:.1}°C", setpoint);
@@ -44,8 +49,9 @@ fn main() {
     // Simulation loop
     for time in 0..simulation_duration {
         // Calculate control signal (-100% to 100%) using PID controller
-        let error = setpoint - current_temp;
-        let control_signal = controller.compute(error, dt);
+        let control_signal = controller
+            .compute(current_temp, dt)
+            .expect("Failed to compute control signal");
 
         // Determine HVAC mode based on control signal
         let hvac_mode = if control_signal > 5.0 {
@@ -84,7 +90,10 @@ fn main() {
     }
 
     // Check controller statistics
-    let stats = controller.get_statistics();
+    let stats = controller
+        .get_statistics()
+        .expect("Failed to get controller statistics");
+
     println!("\nController Performance Statistics:");
     println!("----------------------------------");
     println!("Average error: {:.2}°C", stats.average_error);

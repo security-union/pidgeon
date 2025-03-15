@@ -30,7 +30,7 @@ fn main() {
 
     // Create controller
     #[cfg(feature = "debugging")]
-    let mut controller = {
+    let controller = {
         // Create debug configuration
         let debug_config = DebugConfig {
             iggy_url: "127.0.0.1:8090".to_string(),
@@ -48,7 +48,7 @@ fn main() {
     };
 
     #[cfg(not(feature = "debugging"))]
-    let mut controller = ThreadSafePidController::new(config);
+    let controller = ThreadSafePidController::new(config);
 
     // Simulation variables
     let dt = 1.0; // time step in seconds
@@ -61,11 +61,10 @@ fn main() {
 
     // Simulation loop
     for t in 0..SIMULATION_DURATION {
-        // Calculate error from setpoint
-        let error = TARGET_TEMP - temperature;
-
-        // Calculate control signal
-        let control_signal = controller.compute(error, dt);
+        // Calculate control signal using the current temperature
+        let control_signal = controller
+            .compute(temperature, dt)
+            .expect("Failed to compute control signal");
 
         // Determine HVAC mode
         let hvac_mode = if control_signal > 1.0 {
@@ -96,7 +95,10 @@ fn main() {
     }
 
     // Print controller statistics
-    let stats = controller.get_statistics();
+    let stats = controller
+        .get_statistics()
+        .expect("Failed to get controller statistics");
+
     println!("\nController Performance Statistics:");
     println!("----------------------------------");
     println!("Average error: {:.2}°C", stats.average_error);

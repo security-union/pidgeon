@@ -611,24 +611,34 @@ impl ThreadSafePidController {
     ///    ```
     ///
     /// Choose the approach that best fits your application's requirements for timing accuracy.
-    pub fn compute(&self, process_value: f64, dt: f64) -> f64 {
-        let mut controller = self.controller.lock().unwrap();
-        controller.compute(process_value, dt)
+    pub fn compute(&self, process_value: f64, dt: f64) -> Result<f64, PidError> {
+        let mut controller = self
+            .controller
+            .lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
+        Ok(controller.compute(process_value, dt))
     }
 
     /// Reset the controller state.
-    pub fn reset(&self) {
-        let mut controller = self.controller.lock().unwrap();
+    pub fn reset(&self) -> Result<(), PidError> {
+        let mut controller = self
+            .controller
+            .lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
         controller.reset();
+        Ok(())
     }
 
     /// Get the current control signal.
-    pub fn get_control_signal(&self) -> f64 {
-        let controller = self.controller.lock().unwrap();
+    pub fn get_control_signal(&self) -> Result<f64, PidError> {
+        let controller = self
+            .controller
+            .lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
 
         // If first run, return 0.0 (no control signal yet)
         if controller.first_run {
-            return 0.0;
+            return Ok(0.0);
         }
 
         // For getting the last control signal, we don't want to modify state
@@ -646,7 +656,7 @@ impl ThreadSafePidController {
             output = controller.config.min_output;
         }
 
-        output
+        Ok(output)
     }
 
     /// Set the proportional gain (Kp).
@@ -677,9 +687,13 @@ impl ThreadSafePidController {
     }
 
     /// Set the output limits.
-    pub fn set_output_limits(&self, min: f64, max: f64) {
-        let mut controller = self.controller.lock().unwrap();
+    pub fn set_output_limits(&self, min: f64, max: f64) -> Result<(), PidError> {
+        let mut controller = self
+            .controller
+            .lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
         controller.set_output_limits(min, max);
+        Ok(())
     }
 
     /// Set the setpoint (target value).
@@ -700,9 +714,12 @@ impl ThreadSafePidController {
     }
 
     /// Get the controller statistics.
-    pub fn get_statistics(&self) -> ControllerStatistics {
-        let controller = self.controller.lock().unwrap();
-        controller.get_statistics()
+    pub fn get_statistics(&self) -> Result<ControllerStatistics, PidError> {
+        let controller = self
+            .controller
+            .lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
+        Ok(controller.get_statistics())
     }
 
     /// Set the deadband value.
@@ -980,14 +997,21 @@ mod tests {
         let handle = thread::spawn(move || {
             for i in 0..100 {
                 let process_value = i as f64 * 0.1;
-                thread_controller.compute(process_value, 0.01);
+                // Handle the Result correctly
+                match thread_controller.compute(process_value, 0.01) {
+                    Ok(_) => {}
+                    Err(e) => panic!("Failed to compute: {:?}", e),
+                }
                 thread::sleep(Duration::from_millis(1));
             }
         });
 
         // Meanwhile, read from the controller in the main thread
         for _ in 0..10 {
-            let _ = controller.get_control_signal();
+            // Handle the Result correctly
+            let _ = controller
+                .get_control_signal()
+                .expect("Failed to get control signal");
             thread::sleep(Duration::from_millis(5));
         }
 
@@ -995,7 +1019,9 @@ mod tests {
         handle.join().unwrap();
 
         // Check stats - should show that updates happened
-        let stats = controller.get_statistics();
+        let stats = controller
+            .get_statistics()
+            .expect("Failed to get statistics");
         assert!(stats.average_error > 0.0);
     }
 

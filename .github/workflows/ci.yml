@@ -22,6 +22,26 @@ jobs:
 
       - name: Run cargo test
         run: cargo test
+        
+      - name: Check examples compilation
+        run: cargo check --examples
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Compile all examples
+        run: |
+          for example in $(cargo metadata --format-version=1 | jq -r '.packages[] | select(.name == "pidgeon") | .targets[] | select(.kind[] == "example") | .name'); do
+            echo "Compiling example: $example"
+            cargo build --example "$example"
+          done
 
   lints:
     name: Lints
@@ -39,4 +59,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run cargo clippy
-        run: cargo clippy -- -D warnings 
+        run: cargo clippy -- -D warnings
+
+      - name: Run cargo clippy on examples
+        run: cargo clippy --examples -- -D warnings 

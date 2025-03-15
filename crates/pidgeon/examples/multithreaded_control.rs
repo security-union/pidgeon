@@ -28,6 +28,11 @@ fn main() {
     let simulation_duration = 30; // seconds
     let setpoint = 22.0; // Target temperature in Celsius
 
+    // Set the target temperature
+    controller
+        .set_setpoint(setpoint)
+        .expect("Failed to set setpoint");
+
     // Clone controller for use in sensor thread
     let sensor_controller = Arc::clone(&controller);
 
@@ -64,7 +69,10 @@ fn main() {
             time_elapsed += dt;
 
             // Update controller with new error measurement
-            sensor_controller.compute(error, dt);
+            match sensor_controller.compute(current_temp, dt) {
+                Ok(_) => {}
+                Err(e) => eprintln!("Failed to compute control signal: {:?}", e),
+            }
 
             println!(
                 "SENSOR    | Time: {:5.1}s | Reading: {:5.2}°C | Error: {:+5.2}°C",
@@ -89,7 +97,13 @@ fn main() {
             time_elapsed += 0.5;
 
             // Get the latest control signal from the controller
-            let control_signal = control_controller.get_control_signal();
+            let control_signal = match control_controller.get_control_signal() {
+                Ok(signal) => signal,
+                Err(e) => {
+                    eprintln!("Failed to get control signal: {:?}", e);
+                    continue;
+                }
+            };
 
             // Apply to HVAC system and update room model
             if control_signal > 5.0 {
@@ -133,7 +147,10 @@ fn main() {
     println!("Final temperature: {:.2}°C", room_state.get_temperature());
 
     // Print controller statistics
-    let stats = controller.get_statistics();
+    let stats = controller
+        .get_statistics()
+        .expect("Failed to get controller statistics");
+
     println!("\nController Performance Statistics:");
     println!("Average error: {:.2}°C", stats.average_error);
     println!("Max overshoot: {:.2}°C", stats.max_overshoot);

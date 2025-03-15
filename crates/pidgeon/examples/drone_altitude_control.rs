@@ -121,7 +121,9 @@ fn main() {
         time_history[time_step] = time;
 
         // Use the compute method with the current altitude
-        let control_signal = controller.compute(altitude, DT);
+        let control_signal = controller
+            .compute(altitude, DT)
+            .expect("Failed to compute control signal");
 
         // Apply motor response delay (motors can't change thrust instantly)
         commanded_thrust =
@@ -260,7 +262,9 @@ fn main() {
     }
 
     // Print controller statistics
-    let stats = controller.get_statistics();
+    let stats = controller
+        .get_statistics()
+        .expect("Failed to get controller statistics");
     println!(
         "\nSimulation complete! Ran for {:.1} seconds of simulated time.",
         SIMULATION_DURATION_SECONDS
@@ -269,8 +273,9 @@ fn main() {
     println!("----------------------------------");
     println!("Average altitude error: {:.2} meters", stats.average_error);
     println!(
-        "Maximum deviation from setpoint: {:.2} meters",
-        stats.max_overshoot
+        "Maximum overshoot: {:.2} meters ({}% of setpoint)",
+        stats.max_overshoot,
+        (stats.max_overshoot / SETPOINT_ALTITUDE * 100.0).round()
     );
     println!("Settling time: {:.1} seconds", stats.settling_time);
     println!("Rise time: {:.1} seconds", stats.rise_time);
