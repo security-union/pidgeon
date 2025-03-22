@@ -2584,6 +2584,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "web-time 0.2.4",
 ]
 
 [[package]]
@@ -2825,7 +2826,7 @@ dependencies = [
  "thiserror 2.0.12",
  "tinyvec",
  "tracing",
- "web-time",
+ "web-time 1.1.0",
 ]
 
 [[package]]
@@ -3322,7 +3323,7 @@ version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "917ce264624a4b4db1c364dcc35bfca9ded014d0a958cd47ad3e960e988ea51c"
 dependencies = [
- "web-time",
+ "web-time 1.1.0",
 ]
 
 [[package]]
@@ -4413,6 +4414,16 @@ name = "web-sys"
 version = "0.3.77"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33b6dd2ef9186f1f2072e409e99cd22a975331a6b3591b12c764e0e55c60d5d2"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa30049b1c872b72c89866d458eae9f20380ab280ffd1b1e18df2d3e2d98cfe0"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

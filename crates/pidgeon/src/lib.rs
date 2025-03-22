@@ -9,6 +9,11 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
+
+#[cfg(feature = "wasm")]
+use web_time::{Duration, Instant};
+
+#[cfg(not(feature = "wasm"))]
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "debugging")]
