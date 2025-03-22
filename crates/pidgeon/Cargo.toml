@@ -18,7 +18,7 @@ tokio = { version = "1.35.0", features = ["full"], optional = true }
 serde = { version = "1.0.193", features = ["derive"], optional = true }
 serde_json = { version = "1.0.108", optional = true }
 rand = { version = "0.8.5" }
-web-time = { version = "0.2", optional = true }
+web-time = { version = "1.1.0", optional = true }
 
 [dev-dependencies]
 # Dependencies only used in tests and examples
