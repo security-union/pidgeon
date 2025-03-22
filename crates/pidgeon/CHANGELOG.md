@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/security-union/pidgeon/compare/pidgeon-v0.2.1...pidgeon-v0.2.2) - 2025-03-22
+
+### Added
+
+- add web support ([#18](https://github.com/security-union/pidgeon/pull/18))
+
 ## [0.2.1](https://github.com/security-union/pidgeon/compare/pidgeon-v0.2.0...pidgeon-v0.2.1) - 2025-03-15
 
 ### Other
