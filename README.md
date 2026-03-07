@@ -22,6 +22,9 @@ Pidgeon is designed for developers who need a robust, high-performance PID contr
 
 - **Thread-safe**: ThreadSafePidController ensures safe concurrent access to your PID controller, perfect for multi-threaded applications, it implements the `Clone` trait so that you can easily share the controller across threads.
 - **High-performance**: With sub-microsecond computation times, perfect for real-time robotics and drone applications requiring 1kHz+ control loops.
+- **`no_std` support**: Core types (`ControllerConfig`, `PidState`, `pid_compute()`) work without `std` -- bring your own allocator, or don't. Build with `--no-default-features` for embedded targets.
+- **Derivative modes**: Choose `DerivativeMode::OnMeasurement` (default) to eliminate derivative kick on setpoint changes, or `DerivativeMode::OnError` for classical behavior. IIR low-pass filter on the derivative term tames noise.
+- **Anti-windup strategies**: `AntiWindupMode::Conditional` (default), `BackCalculation` with configurable tracking time, or `None` if you enjoy watching integrals explode.
 - **Use case agnostic**: From quadcopter stabilization to temperature control to maintaining optimal coffee-to-code ratios, Pidgeon doesn't judge your control theory applications.
 - **Written in Rust**: Memory safety without garbage collection, because who needs garbage when you've got ownership?
 - **Minimal dependencies**: Doesn't pull in half of crates.io.
@@ -63,25 +66,22 @@ This example demonstrates how to create a Controller, please refer to the exampl
 
 ```rust
 use pidgeon::{ControllerConfig, ThreadSafePidController};
-use rand::{thread_rng, Rng};
-use std::{
-    io::{self, Write},
-    thread,
-    time::Duration,
-};
+use std::{thread, time::Duration};
 
 const SETPOINT_ALTITUDE: f64 = 10.0; // Target altitude in meters
 
 fn main() {
     // Create a PID controller with carefully tuned gains for altitude control
-    let config = ControllerConfig::new()
+    let config = ControllerConfig::builder()
         .with_kp(10.0) // Proportional gain - immediate response to altitude error
         .with_ki(5.0) // Integral gain - eliminates steady-state error (hovering accuracy)
         .with_kd(8.0) // Derivative gain - dampens oscillations (crucial for stability)
         .with_output_limits(0.0, 100.0) // Thrust percentage (0-100%)
         .with_setpoint(SETPOINT_ALTITUDE)
         .with_deadband(0.0) // Set deadband to zero for exact tracking to setpoint
-        .with_anti_windup(true); // Prevent integral term accumulation when saturated
+        .with_anti_windup(true) // Prevent integral term accumulation when saturated
+        .build()
+        .expect("Invalid PID configuration");
 
     let controller = ThreadSafePidController::new(config);
 }
@@ -102,13 +102,15 @@ Unless you explicitly state otherwise, any contribution intentionally submitted 
 
 ## Performance Benchmarks
 
-Pidgeon is designed for high-performance control applications:
+Pidgeon is designed for high-performance control applications. v0.3.0 added input validation, derivative filtering, and `Result` returns -- about 2.4x slower than v0.2.1 in microbenchmarks, still ~9 ns/call. A 100 kHz control loop uses less than 0.1% of one core.
 
-| Benchmark               | Time (ns)       | Operations/sec | Description                                                      |
-|-------------------------|-----------------|----------------|------------------------------------------------------------------|
-| `pid_compute`           | 394.23 ns       | 2,536,590/s    | Single-threaded processing of 100 consecutive updates           |
-| `thread_safe_pid_compute` | 673.21 ns     | 1,485,420/s    | Thread-safe controller without concurrent access                 |
-| `multi_threaded_pid`    | 26,144 ns       | 38,250/s       | Concurrent access with updating and reading threads              |
+| Benchmark               | Time            | Per-call   | Description                                                      |
+|-------------------------|-----------------|------------|------------------------------------------------------------------|
+| `pid_compute`           | 926 ns / 100    | ~9.3 ns    | Single-threaded, 100 consecutive updates                        |
+| `thread_safe_pid_compute` | 1,022 ns / 100 | ~10.2 ns  | Mutex-wrapped, no contention                                     |
+| `multi_threaded_pid`    | 25,220 ns       | --         | 2 threads: 50 writes + 20 reads                                 |
+
+*Measured on Apple Silicon. Your mileage will vary, but probably not by much.*
 
 ### Running Benchmarks
 
@@ -158,7 +160,7 @@ Enable debugging by adding the `debugging` feature to your Cargo.toml:
 ```toml
 # In your Cargo.toml
 [dependencies]
-pidgeon = { version = "1.0", features = ["debugging"] }
+pidgeon = { version = "0.3", features = ["debugging"] }
 ```
 
 Configuration example:
@@ -167,13 +169,15 @@ Configuration example:
 use pidgeon::{ControllerConfig, ThreadSafePidController, DebugConfig};
 
 // Create your controller configuration
-let config = ControllerConfig::new()
+let config = ControllerConfig::builder()
     .with_kp(2.0)
     .with_ki(0.1)
     .with_kd(0.5)
     .with_output_limits(-100.0, 100.0)
     .with_anti_windup(true)
-    .with_setpoint(22.0);
+    .with_setpoint(22.0)
+    .build()
+    .expect("Invalid PID configuration");
 
 // Create debug configuration to stream data to Iggy
 let debug_config = DebugConfig {

@@ -1,6 +1,6 @@
 use pidgeon::{ControllerConfig, ThreadSafePidController};
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(feature = "debugging")]
 use pidgeon::DebugConfig;
@@ -20,13 +20,15 @@ fn main() {
     println!();
 
     // Create PID controller configuration
-    let config = ControllerConfig::new()
+    let config = ControllerConfig::builder()
         .with_kp(2.0) // Proportional gain
         .with_ki(0.1) // Integral gain
         .with_kd(0.5) // Derivative gain
         .with_output_limits(-100.0, 100.0) // Control signal limits in %
         .with_anti_windup(true)
-        .with_setpoint(TARGET_TEMP);
+        .with_setpoint(TARGET_TEMP)
+        .build()
+        .expect("Invalid PID config");
 
     // Create controller
     #[cfg(feature = "debugging")]

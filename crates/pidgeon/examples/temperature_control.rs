@@ -12,12 +12,14 @@ use std::time::Duration;
 /// - An external disturbance (window opening) to test controller response
 fn main() {
     // Create a PID controller with appropriate gains for temperature control
-    let config = ControllerConfig::new()
+    let config = ControllerConfig::builder()
         .with_kp(2.0) // Proportional gain
         .with_ki(0.1) // Integral gain
         .with_kd(0.5) // Derivative gain
         .with_output_limits(-100.0, 100.0) // Limit control signal (-100% to 100%)
-        .with_anti_windup(true); // Prevent integral windup
+        .with_anti_windup(true) // Prevent integral windup
+        .build()
+        .expect("Invalid PID config");
 
     let controller = ThreadSafePidController::new(config);
 

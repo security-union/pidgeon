@@ -15,12 +15,14 @@ fn main() {
     println!("==============================================");
 
     // Create a thread-safe PID controller that can be shared across threads
-    let config = ControllerConfig::new()
+    let config = ControllerConfig::builder()
         .with_kp(2.0)
         .with_ki(0.5)
         .with_kd(1.0)
         .with_output_limits(-100.0, 100.0)
-        .with_anti_windup(true);
+        .with_anti_windup(true)
+        .build()
+        .expect("Invalid PID config");
 
     let controller = Arc::new(ThreadSafePidController::new(config));
 
@@ -178,14 +180,12 @@ impl SimulatedRoom {
     }
 
     fn get_temperature(&self) -> f64 {
-        // Update temperature based on time elapsed and thermal loss to environment
         let mut temp = self.temperature.lock().unwrap();
         let mut last_update = self.last_update.lock().unwrap();
 
         let now = std::time::Instant::now();
         let dt = now.duration_since(*last_update).as_secs_f64();
 
-        // Apply thermal loss to environment
         let thermal_loss = 0.1 * (*temp - self.ambient_temperature);
         *temp -= thermal_loss * dt;
 
@@ -200,7 +200,6 @@ impl SimulatedRoom {
         let now = std::time::Instant::now();
         let dt = now.duration_since(*last_update).as_secs_f64();
 
-        // Apply heating power to increase temperature
         let power = self.hvac_power * power_percentage / 100.0;
         let temp_change = power * dt / self.thermal_mass;
 
@@ -215,7 +214,6 @@ impl SimulatedRoom {
         let now = std::time::Instant::now();
         let dt = now.duration_since(*last_update).as_secs_f64();
 
-        // Apply cooling power to decrease temperature
         let power = self.hvac_power * power_percentage / 100.0;
         let temp_change = power * dt / self.thermal_mass;
 
@@ -224,7 +222,6 @@ impl SimulatedRoom {
     }
 
     fn idle(&self) {
-        // Just update the last update time
         let mut last_update = self.last_update.lock().unwrap();
         *last_update = std::time::Instant::now();
     }

@@ -28,27 +28,18 @@ const MAX_GUST_VELOCITY: f64 = 3.0; // Maximum wind gust velocity (positive = up
 /// This example demonstrates using the Pidgeon PID controller library
 /// to regulate the altitude of a quadcopter drone, visualized with an
 /// ASCII chart showing the controller's performance in real-time.
-///
-/// ## Physics Modeled:
-/// - Drone mass and inertia
-/// - Propeller thrust dynamics
-/// - Aerodynamic drag
-/// - Gravitational forces
-/// - Wind disturbances
-/// - Battery voltage drop affecting motor performance
-///
-/// The visualization shows how the PID controller responds to disturbances
-/// with altitude, velocity, thrust, and error plotted over time.
 fn main() {
     // Create a PID controller with carefully tuned gains for altitude control
-    let config = ControllerConfig::new()
+    let config = ControllerConfig::builder()
         .with_kp(10.0) // Proportional gain - immediate response to altitude error
         .with_ki(5.0) // Integral gain - eliminates steady-state error (hovering accuracy)
         .with_kd(8.0) // Derivative gain - dampens oscillations (crucial for stability)
         .with_output_limits(0.0, 100.0) // Thrust percentage (0-100%)
         .with_setpoint(SETPOINT_ALTITUDE)
         .with_deadband(0.0) // Set deadband to zero for exact tracking to setpoint
-        .with_anti_windup(true); // Prevent integral term accumulation when saturated
+        .with_anti_windup(true) // Prevent integral term accumulation when saturated
+        .build()
+        .expect("Invalid PID config");
 
     let controller = ThreadSafePidController::new(config);
 
@@ -82,9 +73,7 @@ fn main() {
     let mut wind_gusts = Vec::with_capacity(NUM_RANDOM_GUSTS);
 
     for _ in 0..NUM_RANDOM_GUSTS {
-        // Random time between 10 seconds and simulation_duration - 10 seconds
         let gust_time = rng.gen_range(10.0..(SIMULATION_DURATION_SECONDS - 10.0));
-        // Random velocity between MIN_GUST_VELOCITY and MAX_GUST_VELOCITY
         let gust_velocity = rng.gen_range(MIN_GUST_VELOCITY..MAX_GUST_VELOCITY);
         wind_gusts.push((gust_time, gust_velocity));
     }
@@ -133,9 +122,7 @@ fn main() {
         thrust = commanded_thrust * max_thrust / 100.0;
 
         // Apply battery voltage drop effect (decreases max thrust over time)
-        // Simulating a linear voltage drop to 80% over the full simulation
         if time > 5.0 {
-            // Start battery degradation after 5 seconds
             let voltage_factor = 1.0 - 0.2 * (time - 5.0) / (SIMULATION_DURATION_SECONDS - 5.0);
             thrust *= voltage_factor;
         }
@@ -160,9 +147,8 @@ fn main() {
         let error = SETPOINT_ALTITUDE - altitude;
 
         // Determine drone condition for display
-        // Calculate the exact thrust percentage needed for hovering
         let hover_thrust_pct = gravity * drone_mass * 100.0 / max_thrust;
-        let hover_margin = 2.0; // 2% margin for determining hover state
+        let hover_margin = 2.0;
 
         let drone_condition = if control_signal > 50.0 {
             "Ascending (high power)"
@@ -191,7 +177,6 @@ fn main() {
                     "downward"
                 };
 
-                // Record gust event in condition history
                 condition_history[time_step] = format!("WIND GUST {}!", direction);
             }
         }
@@ -199,8 +184,6 @@ fn main() {
         // Payload drop at 30 seconds (drone becomes 20% lighter)
         if (time - 30.0).abs() < DT / 2.0 {
             drone_mass *= 0.8;
-
-            // Record payload drop in condition history
             condition_history[time_step] = "PAYLOAD DROP!".to_string();
         }
 
@@ -214,14 +197,12 @@ fn main() {
             println!("Drone Altitude Control Simulation - Time: {:.1}s", time);
             println!("=========================================================");
 
-            // Calculate time window for display - we'll show TIME_WINDOW seconds of data
             let window_points = (TIME_WINDOW * CONTROL_RATE_HZ) as usize;
             let window_start = time_step.saturating_sub(window_points);
 
             let visible_time_window =
                 (time_history[time_step] - time_history[window_start]).max(0.1);
 
-            // Display state summary in top left
             println!("System State:");
             println!("╔════════════════════════════════╗");
             println!("║ Time:      {:.2} s             ║", time);
@@ -235,13 +216,11 @@ fn main() {
             println!("║ Condition: {:<18} ║", drone_condition);
             println!("╚════════════════════════════════╝");
 
-            // Plot multiple charts showing last TIME_WINDOW seconds of data
             println!(
                 "Plots showing last {:.1} seconds of data:",
                 visible_time_window
             );
 
-            // Create 2x2 grid of plots
             plot_multi_charts(
                 &time_history[window_start..=time_step],
                 &altitude_history[window_start..=time_step],
@@ -253,7 +232,6 @@ fn main() {
                 PLOT_HEIGHT,
             );
 
-            // Event history
             println!("Last Event: {}", condition_history[time_step]);
         }
 
@@ -298,19 +276,14 @@ fn plot_multi_charts(
     total_width: usize,
     total_height: usize,
 ) {
-    // Calculate dimensions for each chart
-    let chart_width = total_width / 2; // Half the total width
-    let chart_height = total_height / 2; // Half the total height
+    let chart_width = total_width / 2;
+    let chart_height = total_height / 2;
 
-    // Create buffers for each chart
     let mut buffer = vec![vec![' '; total_width]; total_height];
 
-    // Time range (same for all charts)
     let time_min = *time_data.first().unwrap();
     let time_max = *time_data.last().unwrap();
 
-    // Draw the four charts
-    // Upper left: Altitude
     draw_single_chart(
         &mut buffer,
         time_data,
@@ -329,7 +302,6 @@ fn plot_multi_charts(
         Some(SETPOINT_ALTITUDE),
     );
 
-    // Upper right: Velocity
     draw_single_chart(
         &mut buffer,
         time_data,
@@ -345,10 +317,9 @@ fn plot_multi_charts(
         "Velocity (m/s)",
         '◆',
         '╌',
-        Some(0.0), // Zero line
+        Some(0.0),
     );
 
-    // Lower left: Thrust
     draw_single_chart(
         &mut buffer,
         time_data,
@@ -367,7 +338,6 @@ fn plot_multi_charts(
         None,
     );
 
-    // Lower right: Error
     draw_single_chart(
         &mut buffer,
         time_data,
@@ -383,10 +353,9 @@ fn plot_multi_charts(
         "Error (m)",
         '▲',
         '┆',
-        Some(0.0), // Zero line
+        Some(0.0),
     );
 
-    // Add decorative title boxes at the top of each chart
     draw_title_box(&mut buffer, "ALTITUDE (m)", 0, 3, chart_width);
     draw_title_box(&mut buffer, "VELOCITY (m/s)", chart_width, 3, chart_width);
     draw_title_box(&mut buffer, "THRUST (%)", 0, chart_height + 3, chart_width);
@@ -398,30 +367,24 @@ fn plot_multi_charts(
         chart_width,
     );
 
-    // Mark notable events as vertical lines across all charts
     for i in 0..time_data.len() {
         let condition = &condition_data[i];
         if condition.contains("WIND GUST") || condition.contains("PAYLOAD DROP") {
-            // Calculate x position based on time
             let time_range = time_max - time_min;
             let time = time_data[i];
             let x_percent = (time - time_min) / time_range;
 
-            // Draw vertical lines on all charts
             for chart_row in 0..2 {
                 for chart_col in 0..2 {
                     let chart_x_offset = chart_col * chart_width;
                     let chart_y_offset = chart_row * chart_height;
 
-                    // Adjust for axes
                     let y_axis_offset = 10;
                     let plot_width = chart_width - 15;
 
-                    // Calculate x position in this chart
                     let x =
                         chart_x_offset + y_axis_offset + (x_percent * plot_width as f64) as usize;
 
-                    // Draw vertical marker
                     for (y, row) in buffer
                         .iter_mut()
                         .enumerate()
@@ -438,61 +401,56 @@ fn plot_multi_charts(
         }
     }
 
-    // Print the entire buffer with colors
-    for (y, _) in buffer.iter().enumerate().take(total_height) {
-        for x in 0..total_width {
+    for (y, row) in buffer.iter().enumerate().take(total_height) {
+        for (x, &ch) in row.iter().enumerate() {
             let chart_width = total_width / 2;
             let chart_height = total_height / 2;
 
-            // Determine which chart/quadrant this character belongs to
             let is_in_top_left = y < chart_height && x < chart_width;
             let is_in_top_right = y < chart_height && x >= chart_width;
             let is_in_bottom_left = y >= chart_height && x < chart_width;
             let is_in_bottom_right = y >= chart_height && x >= chart_width;
 
-            // Check if this is in a title box region (top portion of each chart)
             let is_in_title_region = (is_in_top_right || is_in_top_left) && y < 5;
 
-            match buffer[y][x] {
-                '●' => print!("\x1B[33m●\x1B[0m"),   // Yellow for Altitude
-                '◆' => print!("\x1B[34m◆\x1B[0m"),   // Blue for Velocity
-                '■' => print!("\x1B[31m■\x1B[0m"),   // Red for Thrust
-                '▲' => print!("\x1B[32m▲\x1B[0m"),   // Green for Error
-                '━' => print!("\x1B[33m━\x1B[0m"),   // Yellow line for Altitude
-                '╌' => print!("\x1B[34m╌\x1B[0m"),   // Blue line for Velocity
-                '┄' => print!("\x1B[31m┄\x1B[0m"),   // Red line for Thrust
-                '┆' => print!("\x1B[32m┆\x1B[0m"),   // Green line for Error
-                '!' => print!("\x1B[1;31m!\x1B[0m"), // Bright red for events
-                // Title box characters and text within title box
+            match ch {
+                '●' => print!("\x1B[33m●\x1B[0m"),
+                '◆' => print!("\x1B[34m◆\x1B[0m"),
+                '■' => print!("\x1B[31m■\x1B[0m"),
+                '▲' => print!("\x1B[32m▲\x1B[0m"),
+                '━' => print!("\x1B[33m━\x1B[0m"),
+                '╌' => print!("\x1B[34m╌\x1B[0m"),
+                '┄' => print!("\x1B[31m┄\x1B[0m"),
+                '┆' => print!("\x1B[32m┆\x1B[0m"),
+                '!' => print!("\x1B[1;31m!\x1B[0m"),
                 '═' | '║' | '╔' | '╗' | '╚' | '╝' => {
                     if is_in_top_left {
-                        print!("\x1B[1;33m{}\x1B[0m", buffer[y][x]); // Bright yellow
+                        print!("\x1B[1;33m{}\x1B[0m", ch);
                     } else if is_in_top_right {
-                        print!("\x1B[1;34m{}\x1B[0m", buffer[y][x]); // Bright blue
+                        print!("\x1B[1;34m{}\x1B[0m", ch);
                     } else if is_in_bottom_left {
-                        print!("\x1B[1;31m{}\x1B[0m", buffer[y][x]); // Bright red
+                        print!("\x1B[1;31m{}\x1B[0m", ch);
                     } else if is_in_bottom_right {
-                        print!("\x1B[1;32m{}\x1B[0m", buffer[y][x]); // Bright green
+                        print!("\x1B[1;32m{}\x1B[0m", ch);
                     } else {
-                        print!("{}", buffer[y][x]);
+                        print!("{}", ch);
                     }
                 }
-                // Any other characters within the title region should be colored appropriately
                 _ => {
                     if is_in_title_region {
                         if is_in_top_left {
-                            print!("\x1B[1;33m{}\x1B[0m", buffer[y][x]); // Bright yellow
+                            print!("\x1B[1;33m{}\x1B[0m", ch);
                         } else if is_in_top_right {
-                            print!("\x1B[1;34m{}\x1B[0m", buffer[y][x]); // Bright blue
+                            print!("\x1B[1;34m{}\x1B[0m", ch);
                         } else if is_in_bottom_left {
-                            print!("\x1B[1;31m{}\x1B[0m", buffer[y][x]); // Bright red
+                            print!("\x1B[1;31m{}\x1B[0m", ch);
                         } else if is_in_bottom_right {
-                            print!("\x1B[1;32m{}\x1B[0m", buffer[y][x]); // Bright green
+                            print!("\x1B[1;32m{}\x1B[0m", ch);
                         } else {
-                            print!("{}", buffer[y][x]);
+                            print!("{}", ch);
                         }
                     } else {
-                        print!("{}", buffer[y][x]);
+                        print!("{}", ch);
                     }
                 }
             }
@@ -519,16 +477,12 @@ fn draw_single_chart(
     line_char: char,
     reference_line: Option<f64>,
 ) {
-    // Adjust plot dimensions to account for axes and labels
-    let plot_width = width - 15; // Reserve space for y-axis labels
-    let plot_height = height - 5; // Reserve space for x-axis labels
-    let y_axis_offset = 10; // X position where the y-axis starts
+    let plot_width = width - 15;
+    let plot_height = height - 5;
+    let y_axis_offset = 10;
 
-    // Time range
     let time_range = time_max - time_min;
 
-    // Draw borders
-    // Top and bottom borders
     for x in (x_offset + y_axis_offset - 1)..(x_offset + y_axis_offset + plot_width) {
         if x < buffer[0].len() {
             buffer[y_offset][x] = '─';
@@ -536,7 +490,6 @@ fn draw_single_chart(
         }
     }
 
-    // Left and right borders
     for y in y_offset..(y_offset + plot_height + 2) {
         if y < buffer.len() {
             buffer[y][x_offset + y_axis_offset - 1] = '│';
@@ -546,7 +499,6 @@ fn draw_single_chart(
         }
     }
 
-    // Draw corners
     if y_offset < buffer.len() && x_offset + y_axis_offset - 1 < buffer[0].len() {
         buffer[y_offset][x_offset + y_axis_offset - 1] = '┌';
     }
@@ -562,7 +514,6 @@ fn draw_single_chart(
         buffer[y_offset + plot_height + 1][x_offset + y_axis_offset + plot_width - 1] = '┘';
     }
 
-    // Draw title at the top
     for (i, ch) in title.chars().enumerate() {
         let x = x_offset + y_axis_offset + (plot_width / 2) - (title.len() / 2) + i;
         if y_offset > 0 && x < buffer[0].len() {
@@ -570,7 +521,6 @@ fn draw_single_chart(
         }
     }
 
-    // Draw reference line if provided
     if let Some(ref_value) = reference_line {
         let ref_y = y_offset + plot_height
             - ((ref_value - value_min) / (value_max - value_min) * plot_height as f64) as usize;
@@ -585,7 +535,6 @@ fn draw_single_chart(
         }
     }
 
-    // Add Y-axis scale
     let y_tick_count = 5;
     let y_tick_step = (value_max - value_min) / (y_tick_count as f64);
 
@@ -595,12 +544,10 @@ fn draw_single_chart(
             - ((value - value_min) / (value_max - value_min) * plot_height as f64) as usize;
 
         if y < buffer.len() {
-            // Draw horizontal tick
             if x_offset + y_axis_offset - 1 < buffer[0].len() {
                 buffer[y][x_offset + y_axis_offset - 1] = '├';
             }
 
-            // Write label
             let label = format!("{:5.1}", value);
             for (j, ch) in label.chars().enumerate() {
                 if x_offset + j < buffer[0].len() && x_offset + j < x_offset + y_axis_offset - 1 {
@@ -610,7 +557,6 @@ fn draw_single_chart(
         }
     }
 
-    // Add X-axis scale (time)
     let x_tick_count = 4;
     let x_tick_step = time_range / (x_tick_count as f64);
 
@@ -621,10 +567,8 @@ fn draw_single_chart(
             + (i as f64 * plot_width as f64 / x_tick_count as f64) as usize;
 
         if x < buffer[0].len() && y_offset + plot_height + 1 < buffer.len() {
-            // Draw vertical tick
             buffer[y_offset + plot_height + 1][x] = '┬';
 
-            // Write time label
             let label = format!("{:.1}s", time_val);
             for (j, ch) in label.chars().enumerate() {
                 if y_offset + plot_height + 2 + j / label.len() < buffer.len()
@@ -637,7 +581,6 @@ fn draw_single_chart(
         }
     }
 
-    // Add grid lines
     for y in (y_offset + 1)..(y_offset + plot_height) {
         if y % 5 == 0 {
             for x in (x_offset + y_axis_offset)..(x_offset + y_axis_offset + plot_width) {
@@ -648,7 +591,6 @@ fn draw_single_chart(
         }
     }
 
-    // Plot the data
     let x_scale = plot_width as f64 / time_range;
 
     let mut prev_x = None;
@@ -663,10 +605,8 @@ fn draw_single_chart(
                 - ((value - value_min) / (value_max - value_min) * plot_height as f64) as usize;
 
             if y < buffer.len() && x < buffer[0].len() {
-                // Draw point
                 buffer[y][x] = point_char;
 
-                // Connect with line if we have a previous point
                 if let (Some(px), Some(py)) = (prev_x, prev_y) {
                     draw_line(buffer, px, py, x, y, line_char);
                 }
@@ -692,7 +632,6 @@ fn draw_line(plot: &mut [Vec<char>], x0: usize, y0: usize, x1: usize, y1: usize,
     let mut err = dx + dy;
 
     loop {
-        // Skip the endpoints
         if (x0 != x1 || y0 != y1) && x0 >= 0 && y0 >= 0 {
             let xu = x0 as usize;
             let yu = y0 as usize;
@@ -732,21 +671,17 @@ fn draw_title_box(
     y_offset: usize,
     width: usize,
 ) {
-    // Calculate box parameters
-    let box_width = title.len() + 4; // Add padding
+    let box_width = title.len() + 4;
     let box_start_x = x_offset + (width / 2) - (box_width / 2);
 
-    // Ensure we don't go out of bounds
     if box_start_x + box_width >= buffer[0].len() || y_offset >= buffer.len() {
         return;
     }
 
-    // Calculate box coordinates - all relative to y_offset
     let top_y = y_offset;
     let middle_y = y_offset + 1;
     let bottom_y = y_offset + 2;
 
-    // Draw top and bottom borders
     for x in box_start_x..(box_start_x + box_width) {
         if x < buffer[0].len() && top_y < buffer.len() {
             buffer[top_y][x] = '═';
@@ -756,7 +691,6 @@ fn draw_title_box(
         }
     }
 
-    // Draw left and right borders
     if middle_y < buffer.len() {
         if box_start_x < buffer[0].len() {
             buffer[middle_y][box_start_x] = '║';
@@ -766,7 +700,6 @@ fn draw_title_box(
         }
     }
 
-    // Draw corners
     if top_y < buffer.len() && box_start_x < buffer[0].len() {
         buffer[top_y][box_start_x] = '╔';
     }
@@ -780,7 +713,6 @@ fn draw_title_box(
         buffer[bottom_y][box_start_x + box_width - 1] = '╝';
     }
 
-    // Draw title, centered in the box
     if middle_y < buffer.len() {
         for (i, ch) in title.chars().enumerate() {
             let x = box_start_x + 2 + i;
