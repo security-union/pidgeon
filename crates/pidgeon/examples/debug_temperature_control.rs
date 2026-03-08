@@ -1,6 +1,6 @@
 use pidgeon::{ControllerConfig, ThreadSafePidController};
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(feature = "debugging")]
 use pidgeon::DebugConfig;
@@ -20,13 +20,15 @@ fn main() {
     println!();
 
     // Create PID controller configuration
-    let config = ControllerConfig::new()
+    let config = ControllerConfig::builder()
         .with_kp(2.0) // Proportional gain
         .with_ki(0.1) // Integral gain
         .with_kd(0.5) // Derivative gain
         .with_output_limits(-100.0, 100.0) // Control signal limits in %
         .with_anti_windup(true)
-        .with_setpoint(TARGET_TEMP);
+        .with_setpoint(TARGET_TEMP)
+        .build()
+        .expect("Invalid PID config");
 
     // Create controller
     #[cfg(feature = "debugging")]
@@ -51,7 +53,8 @@ fn main() {
     let controller = ThreadSafePidController::new(config);
 
     // Simulation variables
-    let dt = 1.0; // time step in seconds
+    // Each loop iteration sleeps 100ms, so dt must match for real-time fidelity.
+    let dt = 0.1; // time step in seconds (matches 100ms sleep)
     let mut temperature = STARTING_TEMP;
     let thermal_mass = 5.0; // simulated thermal mass (higher = slower changes)
 
@@ -59,8 +62,9 @@ fn main() {
     println!("Time(s) | Temperature(°C) | Control Signal(%) | HVAC Mode");
     println!("--------|-----------------|-------------------|----------");
 
-    // Simulation loop
-    for t in 0..SIMULATION_DURATION {
+    // Simulation loop — total steps = duration / dt
+    let total_steps = (SIMULATION_DURATION as f64 / dt) as u64;
+    for t in 0..total_steps {
         // Calculate control signal using the current temperature
         let control_signal = controller
             .compute(temperature, dt)
@@ -79,13 +83,14 @@ fn main() {
         let heat_transfer = control_signal * HVAC_POWER / thermal_mass;
         let ambient_effect = (AMBIENT_TEMP - temperature) * 0.01; // Natural heat loss/gain
         temperature += heat_transfer + ambient_effect;
+        let sim_time = t as f64 * dt;
         println!(
-            "{:6} | {:15.2} | {:17.1} | {}",
-            t, temperature, control_signal, hvac_mode
+            "{:6.1} | {:15.2} | {:17.1} | {}",
+            sim_time, temperature, control_signal, hvac_mode
         );
 
-        // Simulate a disturbance at t=60s (window opens)
-        if t == 60 {
+        // Simulate a disturbance (window opens)
+        if t == (DISTURBANCE_TIME / dt) as u64 {
             println!(">>> Window opened! Temperature dropped 2°C");
             temperature -= 2.0;
         }
@@ -113,4 +118,5 @@ const AMBIENT_TEMP: f64 = 15.0;
 const STARTING_TEMP: f64 = 5.0;
 const DEADBAND: f64 = 2.0;
 const HVAC_POWER: f64 = 1.0;
-const SIMULATION_DURATION: u64 = 120; // in seconds
+const SIMULATION_DURATION: u64 = 30; // in seconds
+const DISTURBANCE_TIME: f64 = 15.0; // window opens at this simulation time

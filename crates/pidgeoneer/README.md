@@ -72,7 +72,7 @@ pidgeoneer server --port 8080
 use pidgeon::{PidController, ControllerConfig, DebugConfig};
 
 // Create your PID controller config
-let config = ControllerConfig::new()
+let config = ControllerConfig::builder()
     .with_kp(2.0)
     .with_ki(0.5)
     .with_kd(1.0)

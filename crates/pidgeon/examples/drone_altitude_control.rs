@@ -1,792 +1,1081 @@
+use crossterm::{
+    event::{self, Event, KeyCode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    ExecutableCommand,
+};
 use pidgeon::{ControllerConfig, ThreadSafePidController};
-use rand::{thread_rng, Rng};
+use ratatui::{
+    layout::{Alignment, Constraint, Layout, Rect},
+    style::{Color, Modifier, Style},
+    symbols,
+    text::{Line, Span},
+    widgets::{Axis, Block, Borders, Chart, Dataset, Paragraph, Wrap},
+    Frame, Terminal,
+};
 use std::{
-    io::{self, Write},
-    thread,
-    time::Duration,
+    io, thread,
+    time::{Duration, Instant},
 };
 
-// Simulation constants - easy to adjust
-const SIMULATION_DURATION_SECONDS: f64 = 60.0; // Reduced for better visualization
-const CONTROL_RATE_HZ: f64 = 20.0; // Control loop rate in Hz
-const DT: f64 = 1.0 / CONTROL_RATE_HZ; // Time step in seconds
-const SETPOINT_ALTITUDE: f64 = 10.0; // Target altitude in meters
+// Simulation constants
+const CONTROL_RATE_HZ: f64 = 20.0;
+const DT: f64 = 1.0 / CONTROL_RATE_HZ;
+const INITIAL_SETPOINT: f64 = 10.0;
+const SETPOINT_STEP: f64 = 2.0;
+const MAX_SETPOINT: f64 = 25.0;
+const MIN_SETPOINT: f64 = 0.0;
+const WIND_GUST_STRENGTH: f64 = 4.0;
+const MAX_HISTORY_SECONDS: f64 = 60.0;
+const MAX_HISTORY_POINTS: usize = (MAX_HISTORY_SECONDS * CONTROL_RATE_HZ) as usize;
 
-// Visualization constants
-const PLOT_WIDTH: usize = 240; // Total width of all plots (columns)
-const PLOT_HEIGHT: usize = 60; // Total height of all plots (rows)
-const REFRESH_RATE: usize = 10; // How many simulation steps between display updates
-const TIME_WINDOW: f64 = 60.0; // Time window to display in seconds
+// PID gain adjustment step
+const GAIN_STEP: f64 = 1.0;
 
-// Wind gust simulation constants
-const NUM_RANDOM_GUSTS: usize = 3; // Number of random wind gusts
-const MIN_GUST_VELOCITY: f64 = -4.0; // Minimum wind gust velocity (negative = downward)
-const MAX_GUST_VELOCITY: f64 = 3.0; // Maximum wind gust velocity (positive = upward)
+// Missions
+struct Mission {
+    target: f64,
+    description: &'static str,
+    trigger_time: f64,
+}
 
-/// # Drone Altitude Control Simulation with ASCII Visualization
-///
-/// This example demonstrates using the Pidgeon PID controller library
-/// to regulate the altitude of a quadcopter drone, visualized with an
-/// ASCII chart showing the controller's performance in real-time.
-///
-/// ## Physics Modeled:
-/// - Drone mass and inertia
-/// - Propeller thrust dynamics
-/// - Aerodynamic drag
-/// - Gravitational forces
-/// - Wind disturbances
-/// - Battery voltage drop affecting motor performance
-///
-/// The visualization shows how the PID controller responds to disturbances
-/// with altitude, velocity, thrust, and error plotted over time.
-fn main() {
-    // Create a PID controller with carefully tuned gains for altitude control
-    let config = ControllerConfig::new()
-        .with_kp(10.0) // Proportional gain - immediate response to altitude error
-        .with_ki(5.0) // Integral gain - eliminates steady-state error (hovering accuracy)
-        .with_kd(8.0) // Derivative gain - dampens oscillations (crucial for stability)
-        .with_output_limits(0.0, 100.0) // Thrust percentage (0-100%)
-        .with_setpoint(SETPOINT_ALTITUDE)
-        .with_deadband(0.0) // Set deadband to zero for exact tracking to setpoint
-        .with_anti_windup(true); // Prevent integral term accumulation when saturated
+const MISSIONS: &[Mission] = &[
+    Mission {
+        target: 10.0,
+        description: "Take off! Reach 10m cruise altitude",
+        trigger_time: 0.0,
+    },
+    Mission {
+        target: 18.0,
+        description: "Climb to 18m to clear the treeline",
+        trigger_time: 15.0,
+    },
+    Mission {
+        target: 8.0,
+        description: "Descend to 8m for aerial photography",
+        trigger_time: 35.0,
+    },
+    Mission {
+        target: 22.0,
+        description: "Emergency climb to 22m! Obstacle ahead",
+        trigger_time: 55.0,
+    },
+    Mission {
+        target: 5.0,
+        description: "Begin landing approach — descend to 5m",
+        trigger_time: 80.0,
+    },
+    Mission {
+        target: 0.0,
+        description: "Touch down! Land the drone safely",
+        trigger_time: 100.0,
+    },
+];
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Set up terminal
+    enable_raw_mode()?;
+    io::stdout().execute(EnterAlternateScreen)?;
+    let backend = ratatui::backend::CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::new(backend)?;
+
+    // Show intro screen
+    loop {
+        terminal.draw(draw_intro)?;
+        if event::poll(Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        disable_raw_mode()?;
+                        io::stdout().execute(LeaveAlternateScreen)?;
+                        return Ok(());
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
+
+    // PID gains (mutable — user can tweak at runtime)
+    let mut kp = 10.0_f64;
+    let mut ki = 5.0_f64;
+    let mut kd = 8.0_f64;
+
+    // Set up PID controller
+    let config = ControllerConfig::builder()
+        .with_kp(kp)
+        .with_ki(ki)
+        .with_kd(kd)
+        .with_output_limits(0.0, 100.0)
+        .with_setpoint(INITIAL_SETPOINT)
+        .with_deadband(0.0)
+        .with_anti_windup(true)
+        .build()
+        .expect("Invalid PID config");
 
     let controller = ThreadSafePidController::new(config);
 
-    // Calculate iterations based on duration and control rate
-    let iterations = (SIMULATION_DURATION_SECONDS * CONTROL_RATE_HZ) as usize;
+    // Drone physics
+    let gravity = 9.81;
+    let drone_mass = 1.2;
+    let max_thrust = 30.0;
+    let drag_coefficient = 0.3;
+    let motor_response_delay = 0.1;
 
-    // Drone physical properties
-    let mut drone_mass = 1.2; // kg - mutable to simulate payload changes
-    let gravity = 9.81; // m/s²
-    let max_thrust = 30.0; // Newtons (total from all motors)
-    let drag_coefficient = 0.3; // Simple drag model
-    let motor_response_delay = 0.1; // Motor response delay in seconds
+    // State
+    let mut altitude = 0.0;
+    let mut velocity: f64 = 0.0;
+    let mut commanded_thrust = 0.0;
+    let mut setpoint = INITIAL_SETPOINT;
+    let mut pending_gust: Option<f64> = None;
+    let mut auto_missions = true;
 
-    // Initial conditions
-    let mut altitude = 0.0; // Starting on the ground
-    let mut velocity: f64 = 0.0; // Initial vertical velocity
-    let mut thrust; // Initial thrust
-    let mut commanded_thrust = 0.0; // Commanded thrust from PID
+    // PID term tracking (computed locally to mirror the controller)
+    let mut integral_accum = 0.0_f64;
+    let mut prev_measurement = 0.0_f64;
+    let mut first_run = true;
 
-    // Data history for plotting - using ring buffers
-    let buffer_size = iterations + 1; // Large enough to store all simulation data
-    let mut time_history = vec![0.0; buffer_size];
-    let mut altitude_history = vec![0.0; buffer_size];
-    let mut velocity_history = vec![0.0; buffer_size];
-    let mut thrust_history = vec![0.0; buffer_size];
-    let mut error_history = vec![0.0; buffer_size];
-    let mut condition_history = vec!["Starting".to_string(); buffer_size];
+    // Mission tracking
+    let mut current_mission_idx: usize = 0;
+    let mut mission_text = MISSIONS[0].description.to_string();
 
-    // Generate random wind gust times and velocities
-    let mut rng = thread_rng();
-    let mut wind_gusts = Vec::with_capacity(NUM_RANDOM_GUSTS);
+    // Data history
+    let mut altitude_data: Vec<(f64, f64)> = Vec::new();
+    let mut setpoint_data: Vec<(f64, f64)> = Vec::new();
+    let mut velocity_data: Vec<(f64, f64)> = Vec::new();
+    let mut thrust_data: Vec<(f64, f64)> = Vec::new();
+    let mut error_data: Vec<(f64, f64)> = Vec::new();
+    let mut p_term_data: Vec<(f64, f64)> = Vec::new();
+    let mut i_term_data: Vec<(f64, f64)> = Vec::new();
+    let mut d_term_data: Vec<(f64, f64)> = Vec::new();
+    let mut event_log: Vec<(f64, String)> = Vec::new();
 
-    for _ in 0..NUM_RANDOM_GUSTS {
-        // Random time between 10 seconds and simulation_duration - 10 seconds
-        let gust_time = rng.gen_range(10.0..(SIMULATION_DURATION_SECONDS - 10.0));
-        // Random velocity between MIN_GUST_VELOCITY and MAX_GUST_VELOCITY
-        let gust_velocity = rng.gen_range(MIN_GUST_VELOCITY..MAX_GUST_VELOCITY);
-        wind_gusts.push((gust_time, gust_velocity));
-    }
+    let mut current_event = "Engines starting...".to_string();
+    let mut time_step: usize = 0;
+    let mut show_help = false;
+    let mut paused_duration = Duration::ZERO;
+    let mut pause_start: Option<Instant> = None;
+    let start = Instant::now();
 
-    // Sort wind gusts by time for easier processing
-    wind_gusts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-
-    println!("Drone Altitude Control Simulation with Live Visualization");
-    println!("=======================================================");
-    println!("Target altitude: {:.1} meters", SETPOINT_ALTITUDE);
-    println!("Drone mass: {:.1} kg", drone_mass);
-    println!("Max thrust: {:.1} N", max_thrust);
-    println!(
-        "Simulation duration: {:.1} seconds",
-        SIMULATION_DURATION_SECONDS
-    );
-    println!("Control rate: {:.1} Hz (dt = {:.3}s)", CONTROL_RATE_HZ, DT);
-    println!("Time window: {:.1} seconds", TIME_WINDOW);
-    println!("\nPlanned wind gusts:");
-    for (i, (time, velocity)) in wind_gusts.iter().enumerate() {
-        println!(
-            "  Gust {}: at {:.1}s with velocity {:.1} m/s",
-            i + 1,
-            time,
-            velocity
-        );
-    }
-    println!("\nStarting visualization in 3 seconds...");
-    thread::sleep(Duration::from_secs(3));
-
-    // Simulation loop
-    for time_step in 0..iterations {
-        let time = time_step as f64 * DT;
-        time_history[time_step] = time;
-
-        // Use the compute method with the current altitude
-        let control_signal = controller
-            .compute(altitude, DT)
-            .expect("Failed to compute control signal");
-
-        // Apply motor response delay (motors can't change thrust instantly)
-        commanded_thrust =
-            commanded_thrust + (control_signal - commanded_thrust) * DT / motor_response_delay;
-
-        // Convert thrust percentage to Newtons
-        thrust = commanded_thrust * max_thrust / 100.0;
-
-        // Apply battery voltage drop effect (decreases max thrust over time)
-        // Simulating a linear voltage drop to 80% over the full simulation
-        if time > 5.0 {
-            // Start battery degradation after 5 seconds
-            let voltage_factor = 1.0 - 0.2 * (time - 5.0) / (SIMULATION_DURATION_SECONDS - 5.0);
-            thrust *= voltage_factor;
+    loop {
+        // Handle input
+        if event::poll(Duration::from_millis(0))? {
+            if let Event::Key(key) = event::read()? {
+                if show_help {
+                    if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+                        break;
+                    }
+                    show_help = false;
+                    if let Some(ps) = pause_start.take() {
+                        paused_duration += ps.elapsed();
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Up => {
+                            auto_missions = false;
+                            setpoint = (setpoint + SETPOINT_STEP).min(MAX_SETPOINT);
+                            controller
+                                .set_setpoint(setpoint)
+                                .expect("Failed to set setpoint");
+                            let msg = format!("Manual override: target {setpoint:.0}m");
+                            current_event = msg.clone();
+                            event_log.push((time_step as f64 * DT, msg));
+                            mission_text = format!("MANUAL: Hold at {setpoint:.0}m");
+                        }
+                        KeyCode::Down => {
+                            auto_missions = false;
+                            setpoint = (setpoint - SETPOINT_STEP).max(MIN_SETPOINT);
+                            controller
+                                .set_setpoint(setpoint)
+                                .expect("Failed to set setpoint");
+                            let msg = format!("Manual override: target {setpoint:.0}m");
+                            current_event = msg.clone();
+                            event_log.push((time_step as f64 * DT, msg));
+                            mission_text = format!("MANUAL: Hold at {setpoint:.0}m");
+                        }
+                        KeyCode::Char('w') => {
+                            pending_gust = Some(WIND_GUST_STRENGTH);
+                            let msg = format!("WIND GUST (up, +{WIND_GUST_STRENGTH:.1} m/s)");
+                            current_event = msg.clone();
+                            event_log.push((time_step as f64 * DT, msg));
+                        }
+                        KeyCode::Char('s') => {
+                            pending_gust = Some(-WIND_GUST_STRENGTH);
+                            let msg = format!("WIND GUST (down, -{WIND_GUST_STRENGTH:.1} m/s)");
+                            current_event = msg.clone();
+                            event_log.push((time_step as f64 * DT, msg));
+                        }
+                        // PID gain controls
+                        KeyCode::Char('1') => {
+                            kp = (kp + GAIN_STEP).min(50.0);
+                            controller.set_kp(kp).expect("Failed to set Kp");
+                            let msg = format!("Kp = {kp:.1}");
+                            current_event = msg.clone();
+                            event_log.push((time_step as f64 * DT, msg));
+                        }
+                        KeyCode::Char('2') => {
+                            kp = (kp - GAIN_STEP).max(0.0);
+                            controller.set_kp(kp).expect("Failed to set Kp");
+                            let msg = format!("Kp = {kp:.1}");
+                            current_event = msg.clone();
+                            event_log.push((time_step as f64 * DT, msg));
+                        }
+                        KeyCode::Char('3') => {
+                            ki = (ki + GAIN_STEP).min(50.0);
+                            controller.set_ki(ki).expect("Failed to set Ki");
+                            let msg = format!("Ki = {ki:.1}");
+                            current_event = msg.clone();
+                            event_log.push((time_step as f64 * DT, msg));
+                        }
+                        KeyCode::Char('4') => {
+                            ki = (ki - GAIN_STEP).max(0.0);
+                            controller.set_ki(ki).expect("Failed to set Ki");
+                            let msg = format!("Ki = {ki:.1}");
+                            current_event = msg.clone();
+                            event_log.push((time_step as f64 * DT, msg));
+                        }
+                        KeyCode::Char('5') => {
+                            kd = (kd + GAIN_STEP).min(50.0);
+                            controller.set_kd(kd).expect("Failed to set Kd");
+                            let msg = format!("Kd = {kd:.1}");
+                            current_event = msg.clone();
+                            event_log.push((time_step as f64 * DT, msg));
+                        }
+                        KeyCode::Char('6') => {
+                            kd = (kd - GAIN_STEP).max(0.0);
+                            controller.set_kd(kd).expect("Failed to set Kd");
+                            let msg = format!("Kd = {kd:.1}");
+                            current_event = msg.clone();
+                            event_log.push((time_step as f64 * DT, msg));
+                        }
+                        KeyCode::Char('h') => {
+                            show_help = true;
+                            pause_start = Some(Instant::now());
+                        }
+                        KeyCode::Char('m') => {
+                            auto_missions = true;
+                            current_event = "Auto-pilot re-engaged".into();
+                            event_log
+                                .push((time_step as f64 * DT, "Auto-pilot re-engaged".to_string()));
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
 
-        // Calculate acceleration (F = ma)
-        let weight_force = drone_mass * gravity;
-        let drag_force = drag_coefficient * velocity.abs() * velocity; // Quadratic drag
-        let net_force = thrust - weight_force - drag_force;
-        let acceleration = net_force / drone_mass;
+        // Pause simulation while help is shown
+        if show_help {
+            terminal.draw(draw_intro)?;
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
 
-        // Update velocity and position using simple numerical integration
-        velocity += acceleration * DT;
+        let time = time_step as f64 * DT;
+
+        // Check for mission triggers
+        if auto_missions && current_mission_idx < MISSIONS.len() {
+            let mission = &MISSIONS[current_mission_idx];
+            if time >= mission.trigger_time {
+                setpoint = mission.target;
+                controller
+                    .set_setpoint(setpoint)
+                    .expect("Failed to set setpoint");
+                mission_text = mission.description.to_string();
+                let msg = format!("MISSION: {}", mission.description);
+                current_event = msg.clone();
+                event_log.push((time, msg));
+                current_mission_idx += 1;
+            }
+        }
+
+        // Apply pending wind gust
+        if let Some(gust) = pending_gust.take() {
+            velocity += gust;
+        }
+
+        // PID compute
+        let control_signal = controller.compute(altitude, DT).expect("Failed to compute");
+
+        // Compute PID terms locally (mirrors the controller's internal math)
+        let signed_error = setpoint - altitude;
+        let p_term = kp * signed_error;
+        integral_accum += ki * signed_error * DT;
+        // Clamp integral to output range to approximate anti-windup
+        integral_accum = integral_accum.clamp(0.0, 100.0);
+        let i_term = integral_accum;
+        let d_term = if first_run {
+            first_run = false;
+            0.0
+        } else {
+            // Derivative-on-measurement (negated)
+            let raw_deriv = -(altitude - prev_measurement) / DT;
+            kd * raw_deriv
+        };
+        prev_measurement = altitude;
+
+        // Motor response delay
+        commanded_thrust += (control_signal - commanded_thrust) * DT / motor_response_delay;
+
+        // Convert to Newtons
+        let thrust = commanded_thrust * max_thrust / 100.0;
+
+        // Physics
+        let weight = drone_mass * gravity;
+        let drag = drag_coefficient * velocity.abs() * velocity;
+        let accel = (thrust - weight - drag) / drone_mass;
+        velocity += accel * DT;
         altitude += velocity * DT;
-
-        // Safety constraint: drone can't go below ground
         if altitude < 0.0 {
             altitude = 0.0;
             velocity = 0.0;
         }
 
-        // Calculate error for recording
-        let error = SETPOINT_ALTITUDE - altitude;
+        let error = (setpoint - altitude).abs();
 
-        // Determine drone condition for display
-        // Calculate the exact thrust percentage needed for hovering
-        let hover_thrust_pct = gravity * drone_mass * 100.0 / max_thrust;
-        let hover_margin = 2.0; // 2% margin for determining hover state
+        // Record data (with rolling window)
+        altitude_data.push((time, altitude));
+        setpoint_data.push((time, setpoint));
+        velocity_data.push((time, velocity));
+        thrust_data.push((time, commanded_thrust));
+        error_data.push((time, setpoint - altitude));
+        p_term_data.push((time, p_term));
+        i_term_data.push((time, i_term));
+        d_term_data.push((time, d_term));
 
-        let drone_condition = if control_signal > 50.0 {
-            "Ascending (high power)"
-        } else if control_signal > hover_thrust_pct + hover_margin {
-            "Ascending"
-        } else if control_signal < hover_thrust_pct - hover_margin {
-            "Descending"
-        } else {
-            "Hovering"
-        };
+        if altitude_data.len() > MAX_HISTORY_POINTS {
+            altitude_data.remove(0);
+            setpoint_data.remove(0);
+            velocity_data.remove(0);
+            thrust_data.remove(0);
+            error_data.remove(0);
+            p_term_data.remove(0);
+            i_term_data.remove(0);
+            d_term_data.remove(0);
+        }
 
-        // Update history arrays at the current time step
-        altitude_history[time_step] = altitude;
-        velocity_history[time_step] = velocity;
-        thrust_history[time_step] = commanded_thrust;
-        error_history[time_step] = error;
-        condition_history[time_step] = drone_condition.to_string();
+        // Auto-detect flight state
+        if !current_event.contains("WIND")
+            && !current_event.contains("MISSION")
+            && !current_event.contains("Manual")
+            && !current_event.contains("Auto-pilot")
+            && !current_event.starts_with("K")
+        {
+            current_event = if error < 0.5 {
+                "On target".into()
+            } else if control_signal > 50.0 {
+                "Ascending (high power)".into()
+            } else if control_signal > 42.0 {
+                "Ascending".into()
+            } else if control_signal < 38.0 {
+                "Descending".into()
+            } else {
+                "Hovering".into()
+            };
+        }
 
-        // Check for planned wind gusts
-        for (gust_time, gust_velocity) in &wind_gusts {
-            if (time - gust_time).abs() < DT / 2.0 {
-                velocity += gust_velocity;
-                let direction = if *gust_velocity > 0.0 {
-                    "upward"
+        time_step += 1;
+
+        // Render at ~10fps
+        if time_step.is_multiple_of(2) {
+            let time_min = if time > MAX_HISTORY_SECONDS {
+                time - MAX_HISTORY_SECONDS
+            } else {
+                0.0
+            };
+            terminal.draw(|f| {
+                if show_help {
+                    draw_intro(f);
                 } else {
-                    "downward"
-                };
-
-                // Record gust event in condition history
-                condition_history[time_step] = format!("WIND GUST {}!", direction);
-            }
+                    draw_ui(
+                        f,
+                        time,
+                        setpoint,
+                        altitude,
+                        velocity,
+                        commanded_thrust,
+                        kp,
+                        ki,
+                        kd,
+                        &current_event,
+                        &mission_text,
+                        &altitude_data,
+                        &setpoint_data,
+                        &velocity_data,
+                        &thrust_data,
+                        &error_data,
+                        &p_term_data,
+                        &i_term_data,
+                        &d_term_data,
+                        &event_log,
+                        time_min,
+                        time,
+                        auto_missions,
+                    );
+                }
+            })?;
         }
 
-        // Payload drop at 30 seconds (drone becomes 20% lighter)
-        if (time - 30.0).abs() < DT / 2.0 {
-            drone_mass *= 0.8;
-
-            // Record payload drop in condition history
-            condition_history[time_step] = "PAYLOAD DROP!".to_string();
+        // Pace to real time (subtract time spent paused)
+        let expected = Duration::from_secs_f64(time_step as f64 * DT);
+        let elapsed = start.elapsed().saturating_sub(paused_duration);
+        if expected > elapsed {
+            thread::sleep(expected - elapsed);
         }
-
-        // Update visualization approximately every REFRESH_RATE steps
-        if time_step % REFRESH_RATE == 0 {
-            // Clear terminal screen
-            print!("\x1B[2J\x1B[1;1H");
-            io::stdout().flush().unwrap();
-
-            // Display current simulation time
-            println!("Drone Altitude Control Simulation - Time: {:.1}s", time);
-            println!("=========================================================");
-
-            // Calculate time window for display - we'll show TIME_WINDOW seconds of data
-            let window_points = (TIME_WINDOW * CONTROL_RATE_HZ) as usize;
-            let window_start = time_step.saturating_sub(window_points);
-
-            let visible_time_window =
-                (time_history[time_step] - time_history[window_start]).max(0.1);
-
-            // Display state summary in top left
-            println!("System State:");
-            println!("╔════════════════════════════════╗");
-            println!("║ Time:      {:.2} s             ║", time);
-            println!(
-                "║ Altitude:  {:.2} m     (Target: {:.1} m) ║",
-                altitude, SETPOINT_ALTITUDE
-            );
-            println!("║ Velocity:  {:.2} m/s           ║", velocity);
-            println!("║ Thrust:    {:.2} %             ║", commanded_thrust);
-            println!("║ Error:     {:.2} m             ║", error);
-            println!("║ Condition: {:<18} ║", drone_condition);
-            println!("╚════════════════════════════════╝");
-
-            // Plot multiple charts showing last TIME_WINDOW seconds of data
-            println!(
-                "Plots showing last {:.1} seconds of data:",
-                visible_time_window
-            );
-
-            // Create 2x2 grid of plots
-            plot_multi_charts(
-                &time_history[window_start..=time_step],
-                &altitude_history[window_start..=time_step],
-                &velocity_history[window_start..=time_step],
-                &thrust_history[window_start..=time_step],
-                &error_history[window_start..=time_step],
-                &condition_history[window_start..=time_step],
-                PLOT_WIDTH,
-                PLOT_HEIGHT,
-            );
-
-            // Event history
-            println!("Last Event: {}", condition_history[time_step]);
-        }
-
-        // Sleep for visualization purposes
-        thread::sleep(Duration::from_millis(10));
     }
 
-    // Print controller statistics
+    // Restore terminal
+    disable_raw_mode()?;
+    io::stdout().execute(LeaveAlternateScreen)?;
+
+    // Print stats
     let stats = controller
         .get_statistics()
-        .expect("Failed to get controller statistics");
-    println!(
-        "\nSimulation complete! Ran for {:.1} seconds of simulated time.",
-        SIMULATION_DURATION_SECONDS
-    );
-    println!("\nController Performance Statistics:");
-    println!("----------------------------------");
-    println!("Average altitude error: {:.2} meters", stats.average_error);
-    println!(
-        "Maximum overshoot: {:.2} meters ({}% of setpoint)",
-        stats.max_overshoot,
-        (stats.max_overshoot / SETPOINT_ALTITUDE * 100.0).round()
-    );
-    println!("Settling time: {:.1} seconds", stats.settling_time);
-    println!("Rise time: {:.1} seconds", stats.rise_time);
+        .expect("Failed to get statistics");
 
-    println!("\nThis simulation demonstrates how Pidgeon excels in critical real-time control applications where:");
-    println!("✓ Stability and precision are non-negotiable");
-    println!("✓ Adaptation to changing conditions is required");
-    println!("✓ Robust response to disturbances is essential");
-    println!("✓ Thread-safety enables integration with complex robotic systems");
+    println!("\nDrone Altitude Control — Results");
+    println!("================================");
+    println!("PID gains:       Kp={kp:.1}  Ki={ki:.1}  Kd={kd:.1}");
+    println!("Final setpoint:  {:.1} m", setpoint);
+    println!("Final altitude:  {:.2} m", altitude);
+    println!("Average error:   {:.2} m", stats.average_error);
+    println!("Max overshoot:   {:.2} m", stats.max_overshoot);
+    println!("Rise time:       {:.1} s", stats.rise_time);
+    println!("Settling time:   {:.1} s", stats.settling_time);
+
+    Ok(())
 }
 
-/// Creates a 2x2 grid of charts for different metrics
-fn plot_multi_charts(
-    time_data: &[f64],
-    altitude_data: &[f64],
-    velocity_data: &[f64],
-    thrust_data: &[f64],
-    error_data: &[f64],
-    condition_data: &[String],
-    total_width: usize,
-    total_height: usize,
-) {
-    // Calculate dimensions for each chart
-    let chart_width = total_width / 2; // Half the total width
-    let chart_height = total_height / 2; // Half the total height
+fn draw_intro(f: &mut Frame) {
+    let area = f.area();
 
-    // Create buffers for each chart
-    let mut buffer = vec![vec![' '; total_width]; total_height];
+    let layout = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(26),
+        Constraint::Min(0),
+    ])
+    .split(area);
 
-    // Time range (same for all charts)
-    let time_min = *time_data.first().unwrap();
-    let time_max = *time_data.last().unwrap();
+    let center = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(62),
+        Constraint::Min(0),
+    ])
+    .split(layout[1]);
 
-    // Draw the four charts
-    // Upper left: Altitude
-    draw_single_chart(
-        &mut buffer,
-        time_data,
-        altitude_data,
-        time_min,
-        time_max,
-        0.0,
-        15.0,
-        0,
-        0,
-        chart_width,
-        chart_height,
-        "Altitude (m)",
-        '●',
-        '━',
-        Some(SETPOINT_ALTITUDE),
-    );
+    let content_area = center[1];
 
-    // Upper right: Velocity
-    draw_single_chart(
-        &mut buffer,
-        time_data,
-        velocity_data,
-        time_min,
-        time_max,
-        -5.0,
-        5.0,
-        chart_width,
-        0,
-        chart_width,
-        chart_height,
-        "Velocity (m/s)",
-        '◆',
-        '╌',
-        Some(0.0), // Zero line
-    );
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  DRONE ALTITUDE CONTROL",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  A PID Controller Demo",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  You are the flight operator of an autonomous drone.",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            "  A PID controller keeps it stable — your job is to",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            "  give it targets, throw wind at it, and tune the",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            "  controller gains to see how they affect behavior.",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "  FLIGHT:  ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("Up/Down", Style::default().fg(Color::Cyan)),
+            Span::raw(" target  "),
+            Span::styled("W/S", Style::default().fg(Color::Red)),
+            Span::raw(" wind  "),
+            Span::styled("M", Style::default().fg(Color::Green)),
+            Span::raw(" auto"),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  TUNING:  ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("1/2", Style::default().fg(Color::LightRed)),
+            Span::raw(" Kp +/-  "),
+            Span::styled("3/4", Style::default().fg(Color::LightGreen)),
+            Span::raw(" Ki +/-  "),
+            Span::styled("5/6", Style::default().fg(Color::LightBlue)),
+            Span::raw(" Kd +/-"),
+        ]),
+        Line::from(vec![
+            Span::raw("           "),
+            Span::styled("H", Style::default().fg(Color::White)),
+            Span::raw(" help  "),
+            Span::styled("Q", Style::default().fg(Color::DarkGray)),
+            Span::raw(" quit"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  TRY: Set Ki=0 and Kd=0, then watch the drone",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(Span::styled(
+            "  oscillate with only proportional control.",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Press H during flight to show this help again.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Press any key to fly ...",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD | Modifier::SLOW_BLINK),
+        )),
+        Line::from(""),
+    ];
 
-    // Lower left: Thrust
-    draw_single_chart(
-        &mut buffer,
-        time_data,
-        thrust_data,
-        time_min,
-        time_max,
-        0.0,
-        100.0,
-        0,
-        chart_height,
-        chart_width,
-        chart_height,
-        "Thrust (%)",
-        '■',
-        '┄',
-        None,
-    );
+    let intro = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" pidgeon ")
+                .title_alignment(Alignment::Center),
+        )
+        .wrap(Wrap { trim: false });
 
-    // Lower right: Error
-    draw_single_chart(
-        &mut buffer,
-        time_data,
-        error_data,
-        time_min,
-        time_max,
-        -5.0,
-        5.0,
-        chart_width,
-        chart_height,
-        chart_width,
-        chart_height,
-        "Error (m)",
-        '▲',
-        '┆',
-        Some(0.0), // Zero line
-    );
-
-    // Add decorative title boxes at the top of each chart
-    draw_title_box(&mut buffer, "ALTITUDE (m)", 0, 3, chart_width);
-    draw_title_box(&mut buffer, "VELOCITY (m/s)", chart_width, 3, chart_width);
-    draw_title_box(&mut buffer, "THRUST (%)", 0, chart_height + 3, chart_width);
-    draw_title_box(
-        &mut buffer,
-        "ERROR (m)",
-        chart_width,
-        chart_height + 3,
-        chart_width,
-    );
-
-    // Mark notable events as vertical lines across all charts
-    for i in 0..time_data.len() {
-        let condition = &condition_data[i];
-        if condition.contains("WIND GUST") || condition.contains("PAYLOAD DROP") {
-            // Calculate x position based on time
-            let time_range = time_max - time_min;
-            let time = time_data[i];
-            let x_percent = (time - time_min) / time_range;
-
-            // Draw vertical lines on all charts
-            for chart_row in 0..2 {
-                for chart_col in 0..2 {
-                    let chart_x_offset = chart_col * chart_width;
-                    let chart_y_offset = chart_row * chart_height;
-
-                    // Adjust for axes
-                    let y_axis_offset = 10;
-                    let plot_width = chart_width - 15;
-
-                    // Calculate x position in this chart
-                    let x =
-                        chart_x_offset + y_axis_offset + (x_percent * plot_width as f64) as usize;
-
-                    // Draw vertical marker
-                    for (y, row) in buffer
-                        .iter_mut()
-                        .enumerate()
-                        .take(chart_y_offset + chart_height - 5)
-                        .skip(chart_y_offset + 1)
-                    {
-                        if y < total_height && x < total_width && (row[x] == ' ' || row[x] == '·')
-                        {
-                            row[x] = '!';
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Print the entire buffer with colors
-    for (y, _) in buffer.iter().enumerate().take(total_height) {
-        for x in 0..total_width {
-            let chart_width = total_width / 2;
-            let chart_height = total_height / 2;
-
-            // Determine which chart/quadrant this character belongs to
-            let is_in_top_left = y < chart_height && x < chart_width;
-            let is_in_top_right = y < chart_height && x >= chart_width;
-            let is_in_bottom_left = y >= chart_height && x < chart_width;
-            let is_in_bottom_right = y >= chart_height && x >= chart_width;
-
-            // Check if this is in a title box region (top portion of each chart)
-            let is_in_title_region = (is_in_top_right || is_in_top_left) && y < 5;
-
-            match buffer[y][x] {
-                '●' => print!("\x1B[33m●\x1B[0m"),   // Yellow for Altitude
-                '◆' => print!("\x1B[34m◆\x1B[0m"),   // Blue for Velocity
-                '■' => print!("\x1B[31m■\x1B[0m"),   // Red for Thrust
-                '▲' => print!("\x1B[32m▲\x1B[0m"),   // Green for Error
-                '━' => print!("\x1B[33m━\x1B[0m"),   // Yellow line for Altitude
-                '╌' => print!("\x1B[34m╌\x1B[0m"),   // Blue line for Velocity
-                '┄' => print!("\x1B[31m┄\x1B[0m"),   // Red line for Thrust
-                '┆' => print!("\x1B[32m┆\x1B[0m"),   // Green line for Error
-                '!' => print!("\x1B[1;31m!\x1B[0m"), // Bright red for events
-                // Title box characters and text within title box
-                '═' | '║' | '╔' | '╗' | '╚' | '╝' => {
-                    if is_in_top_left {
-                        print!("\x1B[1;33m{}\x1B[0m", buffer[y][x]); // Bright yellow
-                    } else if is_in_top_right {
-                        print!("\x1B[1;34m{}\x1B[0m", buffer[y][x]); // Bright blue
-                    } else if is_in_bottom_left {
-                        print!("\x1B[1;31m{}\x1B[0m", buffer[y][x]); // Bright red
-                    } else if is_in_bottom_right {
-                        print!("\x1B[1;32m{}\x1B[0m", buffer[y][x]); // Bright green
-                    } else {
-                        print!("{}", buffer[y][x]);
-                    }
-                }
-                // Any other characters within the title region should be colored appropriately
-                _ => {
-                    if is_in_title_region {
-                        if is_in_top_left {
-                            print!("\x1B[1;33m{}\x1B[0m", buffer[y][x]); // Bright yellow
-                        } else if is_in_top_right {
-                            print!("\x1B[1;34m{}\x1B[0m", buffer[y][x]); // Bright blue
-                        } else if is_in_bottom_left {
-                            print!("\x1B[1;31m{}\x1B[0m", buffer[y][x]); // Bright red
-                        } else if is_in_bottom_right {
-                            print!("\x1B[1;32m{}\x1B[0m", buffer[y][x]); // Bright green
-                        } else {
-                            print!("{}", buffer[y][x]);
-                        }
-                    } else {
-                        print!("{}", buffer[y][x]);
-                    }
-                }
-            }
-        }
-        println!();
-    }
+    f.render_widget(intro, content_area);
 }
 
-/// Draw a single chart for one metric
-fn draw_single_chart(
-    buffer: &mut [Vec<char>],
-    time_data: &[f64],
-    value_data: &[f64],
+#[allow(clippy::too_many_arguments)]
+fn draw_ui(
+    f: &mut Frame,
+    time: f64,
+    setpoint: f64,
+    altitude: f64,
+    velocity: f64,
+    thrust: f64,
+    kp: f64,
+    ki: f64,
+    kd: f64,
+    event: &str,
+    mission: &str,
+    altitude_data: &[(f64, f64)],
+    setpoint_data: &[(f64, f64)],
+    velocity_data: &[(f64, f64)],
+    thrust_data: &[(f64, f64)],
+    error_data: &[(f64, f64)],
+    p_term_data: &[(f64, f64)],
+    i_term_data: &[(f64, f64)],
+    d_term_data: &[(f64, f64)],
+    event_log: &[(f64, String)],
     time_min: f64,
     time_max: f64,
-    value_min: f64,
-    value_max: f64,
-    x_offset: usize,
-    y_offset: usize,
-    width: usize,
-    height: usize,
-    title: &str,
-    point_char: char,
-    line_char: char,
-    reference_line: Option<f64>,
+    auto_mode: bool,
 ) {
-    // Adjust plot dimensions to account for axes and labels
-    let plot_width = width - 15; // Reserve space for y-axis labels
-    let plot_height = height - 5; // Reserve space for x-axis labels
-    let y_axis_offset = 10; // X position where the y-axis starts
+    let area = f.area();
 
-    // Time range
-    let time_range = time_max - time_min;
+    let main_layout = Layout::vertical([
+        Constraint::Length(3), // mission
+        Constraint::Length(3), // status
+        Constraint::Length(3), // controls
+        Constraint::Min(0),    // charts
+        Constraint::Length(5), // event log
+    ])
+    .split(area);
 
-    // Draw borders
-    // Top and bottom borders
-    for x in (x_offset + y_axis_offset - 1)..(x_offset + y_axis_offset + plot_width) {
-        if x < buffer[0].len() {
-            buffer[y_offset][x] = '─';
-            buffer[y_offset + plot_height + 1][x] = '─';
-        }
-    }
+    // Mission bar
+    let mode_indicator = if auto_mode {
+        Span::styled(" AUTO ", Style::default().fg(Color::Black).bg(Color::Green))
+    } else {
+        Span::styled(
+            " MANUAL ",
+            Style::default().fg(Color::Black).bg(Color::Magenta),
+        )
+    };
 
-    // Left and right borders
-    for y in y_offset..(y_offset + plot_height + 2) {
-        if y < buffer.len() {
-            buffer[y][x_offset + y_axis_offset - 1] = '│';
-            if x_offset + y_axis_offset + plot_width - 1 < buffer[0].len() {
-                buffer[y][x_offset + y_axis_offset + plot_width - 1] = '│';
-            }
-        }
-    }
+    let mission_line = Line::from(vec![
+        Span::raw(" "),
+        mode_indicator,
+        Span::raw("  "),
+        Span::styled(
+            mission,
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
 
-    // Draw corners
-    if y_offset < buffer.len() && x_offset + y_axis_offset - 1 < buffer[0].len() {
-        buffer[y_offset][x_offset + y_axis_offset - 1] = '┌';
-    }
-    if y_offset < buffer.len() && x_offset + y_axis_offset + plot_width - 1 < buffer[0].len() {
-        buffer[y_offset][x_offset + y_axis_offset + plot_width - 1] = '┐';
-    }
-    if y_offset + plot_height + 1 < buffer.len() && x_offset + y_axis_offset - 1 < buffer[0].len() {
-        buffer[y_offset + plot_height + 1][x_offset + y_axis_offset - 1] = '└';
-    }
-    if y_offset + plot_height + 1 < buffer.len()
-        && x_offset + y_axis_offset + plot_width - 1 < buffer[0].len()
-    {
-        buffer[y_offset + plot_height + 1][x_offset + y_axis_offset + plot_width - 1] = '┘';
-    }
+    let mission_widget = Paragraph::new(mission_line).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Mission "),
+    );
+    f.render_widget(mission_widget, main_layout[0]);
 
-    // Draw title at the top
-    for (i, ch) in title.chars().enumerate() {
-        let x = x_offset + y_axis_offset + (plot_width / 2) - (title.len() / 2) + i;
-        if y_offset > 0 && x < buffer[0].len() {
-            buffer[y_offset - 1][x] = ch;
-        }
-    }
+    // Status bar with PID gains
+    let error = (setpoint - altitude).abs();
+    let alt_color = if error < 0.5 {
+        Color::Green
+    } else if error < 2.0 {
+        Color::Yellow
+    } else {
+        Color::Red
+    };
 
-    // Draw reference line if provided
-    if let Some(ref_value) = reference_line {
-        let ref_y = y_offset + plot_height
-            - ((ref_value - value_min) / (value_max - value_min) * plot_height as f64) as usize;
-        for x in (x_offset + y_axis_offset)..(x_offset + y_axis_offset + plot_width) {
-            if ref_y < buffer.len()
-                && x < buffer[0].len()
-                && ref_y > y_offset
-                && buffer[ref_y][x] == ' '
-            {
-                buffer[ref_y][x] = '·';
-            }
-        }
-    }
+    let event_color = if event.contains("WIND") {
+        Color::Red
+    } else if event.contains("On target") {
+        Color::Green
+    } else {
+        Color::Gray
+    };
 
-    // Add Y-axis scale
-    let y_tick_count = 5;
-    let y_tick_step = (value_max - value_min) / (y_tick_count as f64);
+    let status_line = Line::from(vec![
+        Span::raw(format!(" t={:.1}s  Alt=", time)),
+        Span::styled(format!("{:.1}m", altitude), Style::default().fg(alt_color)),
+        Span::raw(format!(
+            "/{:.0}m  Vel={:.1}  Thr={:.0}%  ",
+            setpoint, velocity, thrust
+        )),
+        Span::styled(format!("Kp={kp:.0} "), Style::default().fg(Color::LightRed)),
+        Span::styled(
+            format!("Ki={ki:.0} "),
+            Style::default().fg(Color::LightGreen),
+        ),
+        Span::styled(
+            format!("Kd={kd:.0}  "),
+            Style::default().fg(Color::LightBlue),
+        ),
+        Span::styled(event, Style::default().fg(event_color)),
+    ]);
 
-    for i in 0..=y_tick_count {
-        let value = value_min + i as f64 * y_tick_step;
-        let y = y_offset + plot_height
-            - ((value - value_min) / (value_max - value_min) * plot_height as f64) as usize;
+    let status = Paragraph::new(status_line).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Flight Status "),
+    );
+    f.render_widget(status, main_layout[1]);
 
-        if y < buffer.len() {
-            // Draw horizontal tick
-            if x_offset + y_axis_offset - 1 < buffer[0].len() {
-                buffer[y][x_offset + y_axis_offset - 1] = '├';
-            }
+    // Controls bar
+    let controls = Paragraph::new(Line::from(vec![
+        Span::styled(
+            " Up/Down ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("Alt  "),
+        Span::styled(
+            " W/S ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("Wind  "),
+        Span::styled(
+            " 1/2 ",
+            Style::default()
+                .fg(Color::LightRed)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("Kp  "),
+        Span::styled(
+            " 3/4 ",
+            Style::default()
+                .fg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("Ki  "),
+        Span::styled(
+            " 5/6 ",
+            Style::default()
+                .fg(Color::LightBlue)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("Kd  "),
+        Span::styled(
+            " M ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("Auto  "),
+        Span::styled(
+            " H ",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("Help  "),
+        Span::styled(
+            " Q ",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("Quit"),
+    ]))
+    .block(Block::default().borders(Borders::ALL).title(" Controls "));
+    f.render_widget(controls, main_layout[2]);
 
-            // Write label
-            let label = format!("{:5.1}", value);
-            for (j, ch) in label.chars().enumerate() {
-                if x_offset + j < buffer[0].len() && x_offset + j < x_offset + y_axis_offset - 1 {
-                    buffer[y][x_offset + j] = ch;
-                }
-            }
-        }
-    }
+    // 2x2 chart grid
+    let rows = Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(main_layout[3]);
+    let top_cols =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
+    let bot_cols =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[1]);
 
-    // Add X-axis scale (time)
-    let x_tick_count = 4;
-    let x_tick_step = time_range / (x_tick_count as f64);
+    let x_labels = vec![
+        Span::raw(format!("{:.0}s", time_min)),
+        Span::raw(format!("{:.0}s", (time_min + time_max) / 2.0)),
+        Span::raw(format!("{:.0}s", time_max)),
+    ];
 
-    for i in 0..=x_tick_count {
-        let time_val = time_min + i as f64 * x_tick_step;
-        let x = x_offset
-            + y_axis_offset
-            + (i as f64 * plot_width as f64 / x_tick_count as f64) as usize;
+    // ── Chart 1: Altitude + Setpoint (top-left) ──
+    let alt_data_max = altitude_data
+        .iter()
+        .map(|(_, v)| *v)
+        .fold(0.0_f64, f64::max);
+    let sp_data_max = setpoint_data
+        .iter()
+        .map(|(_, v)| *v)
+        .fold(0.0_f64, f64::max);
+    let alt_y_max = alt_data_max.max(sp_data_max).max(5.0) + 3.0;
+    let alt_y_max = (alt_y_max / 5.0).ceil() * 5.0;
+    let alt_y_labels: Vec<String> = (0..=alt_y_max as i32)
+        .step_by(5)
+        .map(|v| format!("{v}"))
+        .collect();
+    render_dual_chart(
+        f,
+        top_cols[0],
+        "Altitude (m)",
+        altitude_data,
+        Color::Yellow,
+        "Target",
+        setpoint_data,
+        Color::Red,
+        time_min,
+        time_max,
+        0.0,
+        alt_y_max,
+        &x_labels,
+        &alt_y_labels.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+    );
 
-        if x < buffer[0].len() && y_offset + plot_height + 1 < buffer.len() {
-            // Draw vertical tick
-            buffer[y_offset + plot_height + 1][x] = '┬';
+    // ── Chart 2: Velocity + Thrust (top-right) ──
+    // Normalize thrust to velocity scale for overlay
+    let vel_abs_max = velocity_data
+        .iter()
+        .map(|(_, v)| v.abs())
+        .fold(4.0_f64, f64::max);
+    let vel_bound = (vel_abs_max + 2.0).ceil();
+    render_dual_chart(
+        f,
+        top_cols[1],
+        "Velocity (m/s)",
+        velocity_data,
+        Color::Cyan,
+        "Thrust (%)",
+        thrust_data,
+        Color::Red,
+        time_min,
+        time_max,
+        -vel_bound,
+        vel_bound.max(100.0),
+        &x_labels,
+        &[
+            &format!("{:.0}", -vel_bound),
+            "0",
+            "50",
+            &format!("{:.0}", vel_bound.max(100.0)),
+        ],
+    );
 
-            // Write time label
-            let label = format!("{:.1}s", time_val);
-            for (j, ch) in label.chars().enumerate() {
-                if y_offset + plot_height + 2 + j / label.len() < buffer.len()
-                    && x + j % label.len() - 1 < buffer[0].len()
-                {
-                    buffer[y_offset + plot_height + 2 + j / label.len()][x + j % label.len() - 1] =
-                        ch;
-                }
-            }
-        }
-    }
+    // ── Chart 3: Error (bottom-left) ──
+    let err_abs_max = error_data
+        .iter()
+        .map(|(_, v)| v.abs())
+        .fold(5.0_f64, f64::max);
+    let err_bound = (err_abs_max + 2.0).ceil();
+    render_chart(
+        f,
+        bot_cols[0],
+        "Error (m)",
+        error_data,
+        Color::Green,
+        time_min,
+        time_max,
+        -err_bound,
+        err_bound,
+        &x_labels,
+        &[
+            &format!("{:.0}", -err_bound),
+            "0",
+            &format!("{:.0}", err_bound),
+        ],
+    );
 
-    // Add grid lines
-    for y in (y_offset + 1)..(y_offset + plot_height) {
-        if y % 5 == 0 {
-            for x in (x_offset + y_axis_offset)..(x_offset + y_axis_offset + plot_width) {
-                if y < buffer.len() && x < buffer[0].len() && buffer[y][x] == ' ' {
-                    buffer[y][x] = '·';
-                }
-            }
-        }
-    }
+    // ── Chart 4: PID Terms (bottom-right) ──
+    let pid_abs_max = p_term_data
+        .iter()
+        .chain(i_term_data.iter())
+        .chain(d_term_data.iter())
+        .map(|(_, v)| v.abs())
+        .fold(10.0_f64, f64::max);
+    let pid_bound = (pid_abs_max + 5.0).ceil();
+    let pid_bound = (pid_bound / 10.0).ceil() * 10.0; // round to 10s
+    render_pid_chart(
+        f,
+        bot_cols[1],
+        p_term_data,
+        i_term_data,
+        d_term_data,
+        time_min,
+        time_max,
+        -pid_bound,
+        pid_bound,
+        &x_labels,
+        &[
+            &format!("{:.0}", -pid_bound),
+            "0",
+            &format!("{:.0}", pid_bound),
+        ],
+    );
 
-    // Plot the data
-    let x_scale = plot_width as f64 / time_range;
+    // Event log
+    let recent_events: Vec<Line> = event_log
+        .iter()
+        .rev()
+        .take(3)
+        .map(|(t, msg)| {
+            let color = if msg.contains("WIND") {
+                Color::Red
+            } else if msg.contains("MISSION") {
+                Color::Cyan
+            } else if msg.contains("Auto-pilot") {
+                Color::Green
+            } else if msg.starts_with("K") {
+                Color::Yellow
+            } else {
+                Color::Magenta
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!(" [{:.1}s] ", t),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(msg.clone(), Style::default().fg(color)),
+            ])
+        })
+        .collect();
 
-    let mut prev_x = None;
-    let mut prev_y = None;
-
-    for i in 0..time_data.len() {
-        let value = value_data[i];
-        if value >= value_min && value <= value_max {
-            let time = time_data[i];
-            let x = x_offset + y_axis_offset + ((time - time_min) * x_scale) as usize;
-            let y = y_offset + plot_height
-                - ((value - value_min) / (value_max - value_min) * plot_height as f64) as usize;
-
-            if y < buffer.len() && x < buffer[0].len() {
-                // Draw point
-                buffer[y][x] = point_char;
-
-                // Connect with line if we have a previous point
-                if let (Some(px), Some(py)) = (prev_x, prev_y) {
-                    draw_line(buffer, px, py, x, y, line_char);
-                }
-
-                prev_x = Some(x);
-                prev_y = Some(y);
-            }
-        }
-    }
+    let log = Paragraph::new(recent_events)
+        .block(Block::default().borders(Borders::ALL).title(" Event Log "));
+    f.render_widget(log, main_layout[4]);
 }
 
-/// Draw a line between two points using Bresenham's line algorithm
-fn draw_line(plot: &mut [Vec<char>], x0: usize, y0: usize, x1: usize, y1: usize, line_char: char) {
-    let mut x0 = x0 as isize;
-    let mut y0 = y0 as isize;
-    let x1 = x1 as isize;
-    let y1 = y1 as isize;
+fn render_dual_chart(
+    f: &mut Frame,
+    area: Rect,
+    name1: &str,
+    data1: &[(f64, f64)],
+    color1: Color,
+    name2: &str,
+    data2: &[(f64, f64)],
+    color2: Color,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    x_labels: &[Span],
+    y_labels: &[&str],
+) {
+    let datasets = vec![
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .style(Style::default().fg(color1))
+            .data(data1),
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .style(Style::default().fg(color2))
+            .data(data2),
+    ];
 
-    let dx = (x1 - x0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let dy = -(y1 - y0).abs();
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
+    let y_label_spans: Vec<Span> = y_labels.iter().map(|s| Span::raw(*s)).collect();
 
-    loop {
-        // Skip the endpoints
-        if (x0 != x1 || y0 != y1) && x0 >= 0 && y0 >= 0 {
-            let xu = x0 as usize;
-            let yu = y0 as usize;
+    let title_line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            format!("\u{2588} {name1}"),
+            Style::default().fg(color1).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("\u{2588} {name2}"),
+            Style::default().fg(color2).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]);
 
-            if xu < plot[0].len() && yu < plot.len() && plot[yu][xu] == ' ' {
-                plot[yu][xu] = line_char;
-            }
-        }
+    let chart = Chart::new(datasets)
+        .block(Block::default().borders(Borders::ALL).title(title_line))
+        .x_axis(
+            Axis::default()
+                .title("Time")
+                .style(Style::default().fg(Color::Gray))
+                .bounds([x_min, x_max])
+                .labels(x_labels.to_vec()),
+        )
+        .y_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::Gray))
+                .bounds([y_min, y_max])
+                .labels(y_label_spans),
+        );
 
-        if x0 == x1 && y0 == y1 {
-            break;
-        }
-
-        let e2 = 2 * err;
-        if e2 >= dy {
-            if x0 == x1 {
-                break;
-            }
-            err += dy;
-            x0 += sx;
-        }
-        if e2 <= dx {
-            if y0 == y1 {
-                break;
-            }
-            err += dx;
-            y0 += sy;
-        }
-    }
+    f.render_widget(chart, area);
 }
 
-/// Draw a title box with decorative border
-fn draw_title_box(
-    buffer: &mut [Vec<char>],
-    title: &str,
-    x_offset: usize,
-    y_offset: usize,
-    width: usize,
+fn render_pid_chart(
+    f: &mut Frame,
+    area: Rect,
+    p_data: &[(f64, f64)],
+    i_data: &[(f64, f64)],
+    d_data: &[(f64, f64)],
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    x_labels: &[Span],
+    y_labels: &[&str],
 ) {
-    // Calculate box parameters
-    let box_width = title.len() + 4; // Add padding
-    let box_start_x = x_offset + (width / 2) - (box_width / 2);
+    let datasets = vec![
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .style(Style::default().fg(Color::LightRed))
+            .data(p_data),
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .style(Style::default().fg(Color::LightGreen))
+            .data(i_data),
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .style(Style::default().fg(Color::LightBlue))
+            .data(d_data),
+    ];
 
-    // Ensure we don't go out of bounds
-    if box_start_x + box_width >= buffer[0].len() || y_offset >= buffer.len() {
-        return;
-    }
+    let y_label_spans: Vec<Span> = y_labels.iter().map(|s| Span::raw(*s)).collect();
 
-    // Calculate box coordinates - all relative to y_offset
-    let top_y = y_offset;
-    let middle_y = y_offset + 1;
-    let bottom_y = y_offset + 2;
+    let title_line = Line::from(vec![
+        Span::raw(" PID Terms: "),
+        Span::styled(
+            "\u{2588} P",
+            Style::default()
+                .fg(Color::LightRed)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            "\u{2588} I",
+            Style::default()
+                .fg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            "\u{2588} D",
+            Style::default()
+                .fg(Color::LightBlue)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]);
 
-    // Draw top and bottom borders
-    for x in box_start_x..(box_start_x + box_width) {
-        if x < buffer[0].len() && top_y < buffer.len() {
-            buffer[top_y][x] = '═';
-        }
-        if x < buffer[0].len() && bottom_y < buffer.len() {
-            buffer[bottom_y][x] = '═';
-        }
-    }
+    let chart = Chart::new(datasets)
+        .block(Block::default().borders(Borders::ALL).title(title_line))
+        .x_axis(
+            Axis::default()
+                .title("Time")
+                .style(Style::default().fg(Color::Gray))
+                .bounds([x_min, x_max])
+                .labels(x_labels.to_vec()),
+        )
+        .y_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::Gray))
+                .bounds([y_min, y_max])
+                .labels(y_label_spans),
+        );
 
-    // Draw left and right borders
-    if middle_y < buffer.len() {
-        if box_start_x < buffer[0].len() {
-            buffer[middle_y][box_start_x] = '║';
-        }
-        if box_start_x + box_width - 1 < buffer[0].len() {
-            buffer[middle_y][box_start_x + box_width - 1] = '║';
-        }
-    }
+    f.render_widget(chart, area);
+}
 
-    // Draw corners
-    if top_y < buffer.len() && box_start_x < buffer[0].len() {
-        buffer[top_y][box_start_x] = '╔';
-    }
-    if top_y < buffer.len() && box_start_x + box_width - 1 < buffer[0].len() {
-        buffer[top_y][box_start_x + box_width - 1] = '╗';
-    }
-    if bottom_y < buffer.len() && box_start_x < buffer[0].len() {
-        buffer[bottom_y][box_start_x] = '╚';
-    }
-    if bottom_y < buffer.len() && box_start_x + box_width - 1 < buffer[0].len() {
-        buffer[bottom_y][box_start_x + box_width - 1] = '╝';
-    }
+fn render_chart(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    data: &[(f64, f64)],
+    color: Color,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    x_labels: &[Span],
+    y_labels: &[&str],
+) {
+    let datasets = vec![Dataset::default()
+        .marker(symbols::Marker::Braille)
+        .style(Style::default().fg(color))
+        .data(data)];
 
-    // Draw title, centered in the box
-    if middle_y < buffer.len() {
-        for (i, ch) in title.chars().enumerate() {
-            let x = box_start_x + 2 + i;
-            if x < buffer[0].len() {
-                buffer[middle_y][x] = ch;
-            }
-        }
-    }
+    let y_label_spans: Vec<Span> = y_labels.iter().map(|s| Span::raw(*s)).collect();
+
+    let title_line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            format!("\u{2588} {title}"),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ]);
+
+    let chart = Chart::new(datasets)
+        .block(Block::default().borders(Borders::ALL).title(title_line))
+        .x_axis(
+            Axis::default()
+                .title("Time")
+                .style(Style::default().fg(Color::Gray))
+                .bounds([x_min, x_max])
+                .labels(x_labels.to_vec()),
+        )
+        .y_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::Gray))
+                .bounds([y_min, y_max])
+                .labels(y_label_spans),
+        );
+
+    f.render_widget(chart, area);
 }

@@ -1,6 +1,6 @@
 [package]
 name = "pidgeon"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 description = "A robust, thread-safe PID controller library written in Rust"
 authors = ["Dario Alessandro"]
@@ -17,20 +17,13 @@ iggy = { version = "0.6.203", optional = true }
 tokio = { version = "1.35.0", features = ["full"], optional = true }
 serde = { version = "1.0.193", features = ["derive"], optional = true }
 serde_json = { version = "1.0.108", optional = true }
-rand = { version = "0.8.5" }
 web-time = { version = "1.1.0", optional = true }
 
 [dev-dependencies]
 # Dependencies only used in tests and examples
 criterion = "0.5"
-
-[[example]]
-name = "temperature_control"
-path = "examples/temperature_control.rs"
-
-[[example]]
-name = "multithreaded_control"  
-path = "examples/multithreaded_control.rs"
+ratatui = "0.29"
+crossterm = "0.28"
 
 [[example]]
 name = "debug_temperature_control"
@@ -47,7 +40,8 @@ harness = false
 required-features = ["benchmarks"]
 
 [features]
-default = []
-benchmarks = []
-debugging = ["iggy", "tokio", "serde", "serde_json"]
-wasm = ["web-time"]
+default = ["std"]
+std = []
+benchmarks = ["std"]
+debugging = ["std", "iggy", "tokio", "serde", "serde_json"]
+wasm = ["std", "web-time"]

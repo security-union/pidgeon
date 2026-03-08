@@ -5,11 +5,13 @@ use std::thread;
 
 fn benchmark_pid_controller(c: &mut Criterion) {
     // Setup standard controller
-    let config = ControllerConfig::new()
+    let config = ControllerConfig::builder()
         .with_kp(1.0)
         .with_ki(0.1)
         .with_kd(0.05)
-        .with_output_limits(-100.0, 100.0);
+        .with_output_limits(-100.0, 100.0)
+        .build()
+        .unwrap();
 
     let mut controller = PidController::new(config.clone());
 
@@ -19,7 +21,7 @@ fn benchmark_pid_controller(c: &mut Criterion) {
             for i in 0..100 {
                 let error = black_box(10.0 - (i as f64 * 0.1));
                 let dt = black_box(0.01);
-                black_box(controller.compute(error, dt));
+                black_box(controller.compute(error, dt).unwrap());
             }
         })
     });

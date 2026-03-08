@@ -22,6 +22,9 @@ Pidgeon is designed for developers who need a robust, high-performance PID contr
 
 - **Thread-safe**: ThreadSafePidController ensures safe concurrent access to your PID controller, perfect for multi-threaded applications, it implements the `Clone` trait so that you can easily share the controller across threads.
 - **High-performance**: With sub-microsecond computation times, perfect for real-time robotics and drone applications requiring 1kHz+ control loops.
+- **`no_std` support**: Core types (`ControllerConfig`, `PidState`, `pid_compute()`) work without `std` -- bring your own allocator, or don't. Build with `--no-default-features` for embedded targets.
+- **Derivative modes**: Choose `DerivativeMode::OnMeasurement` (default) to eliminate derivative kick on setpoint changes, or `DerivativeMode::OnError` for classical behavior. IIR low-pass filter on the derivative term tames noise.
+- **Anti-windup strategies**: `AntiWindupMode::Conditional` (default), `BackCalculation` with configurable tracking time, or `None` if you enjoy watching integrals explode.
 - **Use case agnostic**: From quadcopter stabilization to temperature control to maintaining optimal coffee-to-code ratios, Pidgeon doesn't judge your control theory applications.
 - **Written in Rust**: Memory safety without garbage collection, because who needs garbage when you've got ownership?
 - **Minimal dependencies**: Doesn't pull in half of crates.io.
@@ -63,25 +66,22 @@ This example demonstrates how to create a Controller, please refer to the exampl
 
 ```rust
 use pidgeon::{ControllerConfig, ThreadSafePidController};
-use rand::{thread_rng, Rng};
-use std::{
-    io::{self, Write},
-    thread,
-    time::Duration,
-};
+use std::{thread, time::Duration};
 
 const SETPOINT_ALTITUDE: f64 = 10.0; // Target altitude in meters
 
 fn main() {
     // Create a PID controller with carefully tuned gains for altitude control
-    let config = ControllerConfig::new()
+    let config = ControllerConfig::builder()
         .with_kp(10.0) // Proportional gain - immediate response to altitude error
         .with_ki(5.0) // Integral gain - eliminates steady-state error (hovering accuracy)
         .with_kd(8.0) // Derivative gain - dampens oscillations (crucial for stability)
         .with_output_limits(0.0, 100.0) // Thrust percentage (0-100%)
         .with_setpoint(SETPOINT_ALTITUDE)
         .with_deadband(0.0) // Set deadband to zero for exact tracking to setpoint
-        .with_anti_windup(true); // Prevent integral term accumulation when saturated
+        .with_anti_windup(true) // Prevent integral term accumulation when saturated
+        .build()
+        .expect("Invalid PID configuration");
 
     let controller = ThreadSafePidController::new(config);
 }
@@ -102,13 +102,15 @@ Unless you explicitly state otherwise, any contribution intentionally submitted 
 
 ## Performance Benchmarks
 
-Pidgeon is designed for high-performance control applications:
+Pidgeon is designed for high-performance control applications. v0.3.0 added input validation, derivative filtering, and `Result` returns -- about 2.4x slower than v0.2.1 in microbenchmarks, still ~9 ns/call. A 100 kHz control loop uses less than 0.1% of one core.
 
-| Benchmark               | Time (ns)       | Operations/sec | Description                                                      |
-|-------------------------|-----------------|----------------|------------------------------------------------------------------|
-| `pid_compute`           | 394.23 ns       | 2,536,590/s    | Single-threaded processing of 100 consecutive updates           |
-| `thread_safe_pid_compute` | 673.21 ns     | 1,485,420/s    | Thread-safe controller without concurrent access                 |
-| `multi_threaded_pid`    | 26,144 ns       | 38,250/s       | Concurrent access with updating and reading threads              |
+| Benchmark               | Time            | Per-call   | Description                                                      |
+|-------------------------|-----------------|------------|------------------------------------------------------------------|
+| `pid_compute`           | 926 ns / 100    | ~9.3 ns    | Single-threaded, 100 consecutive updates                        |
+| `thread_safe_pid_compute` | 1,022 ns / 100 | ~10.2 ns  | Mutex-wrapped, no contention                                     |
+| `multi_threaded_pid`    | 25,220 ns       | --         | 2 threads: 50 writes + 20 reads                                 |
+
+*Measured on Apple Silicon. Your mileage will vary, but probably not by much.*
 
 ### Running Benchmarks
 
@@ -123,6 +125,14 @@ Experience Pidgeon in action with our comprehensive demo application! The `run_p
 ```bash
 ./run_pidgeon_demo.sh
 ```
+
+<p align="center">
+  <img src="assets/controller_simulation.png" alt="Pidgeoneer Dashboard — HVAC temperature control simulation" width="800"/>
+</p>
+
+The Pidgeoneer dashboard visualizes PID controller behavior in real time, showing an HVAC simulation where the controller drives room temperature from 5°C to a 22°C setpoint. Three time-series charts break the response into process value vs. setpoint, control output, and individual P/I/D term contributions -- making it easy to see exactly how each gain shapes the response. A simulated disturbance at t=15s (a window opening) demonstrates disturbance rejection. Whether you are tuning gains or learning how PID control works, this is the fastest way to build intuition.
+
+**Requires Docker** for the [Iggy](https://iggy.rs) message server (the script handles the container automatically).
 
 This script starts:
 1. **Pidgeoneer Leptos Web Server** - A beautiful web dashboard running on port 3000
@@ -158,7 +168,7 @@ Enable debugging by adding the `debugging` feature to your Cargo.toml:
 ```toml
 # In your Cargo.toml
 [dependencies]
-pidgeon = { version = "1.0", features = ["debugging"] }
+pidgeon = { version = "0.3", features = ["debugging"] }
 ```
 
 Configuration example:
@@ -167,13 +177,15 @@ Configuration example:
 use pidgeon::{ControllerConfig, ThreadSafePidController, DebugConfig};
 
 // Create your controller configuration
-let config = ControllerConfig::new()
+let config = ControllerConfig::builder()
     .with_kp(2.0)
     .with_ki(0.1)
     .with_kd(0.5)
     .with_output_limits(-100.0, 100.0)
     .with_anti_windup(true)
-    .with_setpoint(22.0);
+    .with_setpoint(22.0)
+    .build()
+    .expect("Invalid PID configuration");
 
 // Create debug configuration to stream data to Iggy
 let debug_config = DebugConfig {
@@ -232,60 +244,137 @@ When we evaluated streaming platforms for Pidgeon, Iggy.rs stood out for several
 
 As the hottest streaming platform in the Rust ecosystem, Iggy was the obvious choice for Pidgeon. When your PID controller is making mission-critical decisions thousands of times per second, you need diagnostics that can keep up.
 
-## Appendix: Understanding PID Controllers
+## Appendix: The PID Algorithm in Pidgeon
 
-### What is a PID Controller?
+### The Textbook vs. The Real World
 
-A PID (Proportional-Integral-Derivative) controller is a control loop mechanism that continuously calculates an error value as the difference between a desired setpoint and a measured process variable, then applies a correction based on proportional, integral, and derivative terms.
+The textbook PID equation is elegant: `u(t) = Kp*e(t) + Ki*∫e(τ)dτ + Kd*de/dt`. Three terms, three gains, done.
 
-### Components of a PID Controller
+Nobody ships that to production.
 
-1. **Proportional (P)**: Produces an output proportional to the current error value. A high proportional gain results in a large change in output for a given change in error.
+Raw derivatives amplify sensor noise. Setpoint changes cause derivative spikes. Integral terms wind up when actuators saturate. The textbook equation is the Wright Flyer -- historically important, but you wouldn't fly it across the Atlantic.
 
-2. **Integral (I)**: Accumulates the error over time. It addresses steady-state errors and helps the system reach the setpoint even with persistent disturbances or biases.
+Pidgeon implements a production-grade PID with filtered derivative, anti-windup, deadband, and a pure-function architecture that works from `no_std` embedded targets to WASM browsers. Here's exactly what `pid_compute()` does on every call.
 
-3. **Derivative (D)**: Calculates the rate of change of the error. This helps predict system behavior and reduces overshoot and oscillation.
+### Algorithm Step-by-Step
 
-The control output is calculated as:
+Given inputs `(config, state, process_value, dt)`:
+
+**1. Validate inputs**
+
+Reject non-finite or non-positive `dt`, and non-finite `process_value`. Fail fast, fail loud.
+
+**2. Compute error and apply deadband**
+
 ```
-u(t) = Kp * e(t) + Ki * ∫e(τ)dτ + Kd * de(t)/dt
+error = setpoint - process_value
+
+if |error| <= deadband:
+    working_error = 0
+else:
+    working_error = error - deadband * sign(error)
 ```
 
-Where:
-- u(t) is the control signal
-- e(t) is the error (setpoint - measured value)
-- Kp, Ki, and Kd are the proportional, integral, and derivative gains
+The deadband creates a "close enough" zone around the setpoint where P and I stop reacting. This prevents chatter in systems with discrete actuators (like a relay that shouldn't toggle every cycle). The deadband is subtracted from the magnitude, not zeroed -- so a 2.0 deadband with error=5.0 gives working_error=3.0, not 5.0.
 
-### Historical Context
+**3. Proportional term**
 
-PID controllers have been in use since the early 20th century, with the first formal analysis published by Nicolas Minorsky in 1922. They became widely adopted in industrial control systems in the 1940s and have remained the most commonly used control algorithm for over 80 years.
+```
+P = Kp * working_error
+```
 
-### Ubiquity of PID Controllers
+Nothing exotic here. Proportional response to the deadband-adjusted error.
 
-Despite their relatively simple formulation, PID controllers are used in an astonishing variety of applications:
+**4. Integral term**
 
-- **Industrial**: Temperature, pressure, flow, level, and speed control in manufacturing
-- **Transportation**: Cruise control in cars, autopilot systems in aircraft
-- **Consumer Electronics**: Heating and cooling systems, camera stabilization
-- **Robotics**: Motor control, position control, balance systems
-- **Energy**: Power generation, renewable energy systems
-- **Medicine**: Drug delivery systems, artificial pancreas systems
+```
+integral_contribution += Ki * working_error * dt
+```
 
-An estimated 95% of all control loops in industrial automation use PID control, often as the fundamental building block of more complex control systems.
+A critical design choice: the integral stores `Ki * ∫error·dt`, not the raw integral. Ki is baked into the accumulator. This seems like a minor bookkeeping detail, but it eliminates a division-by-Ki singularity in back-calculation anti-windup (see step 8). When Ki=0, the integral contribution is always 0 -- no special cases, no division by zero.
+
+**5. Derivative term (where it gets interesting)**
+
+The derivative computation has three stages:
+
+**(a) Raw derivative -- choose your mode**
+
+```
+OnMeasurement (default):  raw = -(process_value - prev_process_value) / dt
+OnError:                  raw = (working_error - prev_error) / dt
+```
+
+**Derivative on measurement** is the default for good reason. When a setpoint changes abruptly (say, you command your drone from 10m to 20m), the error jumps instantly. The derivative of that jump is a massive spike -- "derivative kick" -- that slams your actuator. But the *measurement* (actual altitude) changes smoothly regardless of what you asked for. By differentiating `-d(pv)/dt` instead of `d(error)/dt`, the D term only responds to what the system is actually doing, not what you told it to do.
+
+The negative sign is because increasing process_value (moving toward setpoint) should produce negative derivative action (reduce output), which is the damping behavior you want.
+
+**(b) IIR low-pass filter**
+
+```
+alpha = N * dt / (1 + N * dt)
+filtered = prev_filtered + alpha * (raw - prev_filtered)
+```
+
+Raw derivatives are noise amplifiers. Pidgeon applies a first-order IIR (infinite impulse response) low-pass filter with configurable coefficient `N` (default: 10). This is the standard derivative filter from ISA/textbook implementations:
+
+- **N = 2-5**: Heavy smoothing. Use when sensors are noisy.
+- **N = 10**: The standard default. Good balance for most systems.
+- **N = 20-100**: Light filtering. Use when you need fast derivative response and have clean sensors.
+
+The filter's cutoff frequency is approximately `N / (2*pi)` times the controller bandwidth, so higher N lets more high-frequency content through.
+
+**(c) Apply Kd at output time**
+
+```
+D = Kd * filtered
+```
+
+Kd is *not* baked into the filter state. The filter operates on the raw derivative, and Kd multiplies the result at output time. This means you can change Kd at runtime (for gain scheduling, tuning, etc.) without corrupting the filter's internal state. The filter keeps tracking the true derivative of the signal regardless of what gain you multiply it by.
+
+**6. Sum, clamp, and first-run handling**
+
+```
+unclamped = P + integral_contribution + D
+output = clamp(unclamped, min_output, max_output)
+```
+
+On the **first call**, D is forced to 0 (no previous measurement exists), but P and I compute normally. v0.2 returned 0.0 on the first call, which was physically wrong -- a drone hovering at 10m needs ~39% thrust just to counteract gravity, and returning zero means "fall out of the sky for one cycle." v0.3 computes the real P+I output immediately.
+
+**7. Anti-windup (only when output saturates)**
+
+When `output != unclamped` (the clamp engaged), the integral has accumulated error it can never act on. Left unchecked, it keeps growing, and when the setpoint finally changes, the swollen integral causes massive overshoot. Pidgeon offers three strategies:
+
+- **`None`**: No correction. The integral does whatever it wants. Useful for systems where saturation is impossible or where you want to handle windup yourself.
+
+- **`Conditional`** (default): Simply undo this step's integral accumulation:
+  ```
+  integral_contribution -= Ki * working_error * dt
+  ```
+  The integral freezes at its current value during saturation. Simple, effective, and the right choice for most systems.
+
+- **`BackCalculation`**: Adjust the integral based on how far the output was clamped:
+  ```
+  integral_contribution += (output - unclamped) * dt / tracking_time
+  ```
+  This actively *drains* the integral toward a value consistent with the saturated output. The `tracking_time` parameter controls how fast: smaller values = faster correction, larger values = gentler. Because the integral already stores `Ki * ∫error·dt`, there's no `1/Ki` division here -- back-calculation works cleanly even when Ki is tiny.
+
+**8. Store state and return**
+
+```
+state = { integral_contribution, prev_error, prev_measurement,
+          prev_filtered_derivative, last_output, first_run: false }
+return Ok((output, new_state))
+```
+
+The entire computation is a **pure function**: `(config, state, pv, dt) -> (output, new_state)`. No internal clocks, no heap allocation, no side effects. This makes it trivially testable (inject any state you want), `no_std` compatible, and deterministically replayable -- feed the same sequence of inputs and you get the same outputs, always.
 
 ### Why PID Controllers Endure
 
-PID controllers remain ubiquitous for several reasons:
+PID control has been the workhorse of industrial automation since Nicolas Minorsky's 1922 paper, and an estimated 95% of all industrial control loops still use it. Not because engineers lack imagination, but because PID provides the best ratio of "works well enough" to "things that can go wrong." You don't need a mathematical model of your plant. You can tune it empirically. And when something changes -- a new load, a degraded sensor, a different operating point -- a well-tuned PID adapts gracefully.
 
-1. **Simplicity**: The algorithm is straightforward to understand and implement
-2. **Effectiveness**: They work surprisingly well for a wide range of applications
-3. **Robustness**: They can handle a variety of conditions with proper tuning
-4. **No Model Required**: They can be tuned empirically without detailed system models
-5. **Predictability**: Their behavior is well-understood and documented
+As Karl Astrom put it: "PID control is an important technology that has survived many changes in technology, from mechanics and pneumatics to microprocessors via electronic tubes, transistors, integrated circuits."
 
-While more advanced control algorithms exist (model predictive control, adaptive control, fuzzy logic), PID control often provides the best balance of performance, complexity, and reliability.
-
-In the words of control theorist Karl Åström: "PID control is an important technology that has survived many changes in technology, from mechanics and pneumatics to microprocessors via electronic tubes, transistors, integrated circuits."
+Pidgeon carries that tradition forward with a Rust implementation that's fast enough for 100kHz control loops, safe enough for multi-threaded systems, and small enough for embedded targets. Like its namesake, it just keeps delivering.
 
 ### References
 
