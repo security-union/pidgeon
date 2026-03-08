@@ -38,10 +38,11 @@ cargo run --example drone_altitude_control
 ```
 
 <p align="center">
-    <video src="https://github.com/user-attachments/assets/ba0cf3f6-d61b-4323-bed1-c9be2dbeb851"  width="600"></video>
+    <video src="https://github.com/user-attachments/assets/5c368a6d-a2e3-4c9e-b2d8-7ff92f76e3e8"  width="600"></video>
 </p>
 
 #### Drone Altitude Simulation
+
 
 The visualization above shows our PID controller in action, maintaining a quadcopter's altitude despite various disturbances. This simulator models real-world drone physics including:
 
