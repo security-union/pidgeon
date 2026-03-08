@@ -26,14 +26,6 @@ ratatui = "0.29"
 crossterm = "0.28"
 
 [[example]]
-name = "temperature_control"
-path = "examples/temperature_control.rs"
-
-[[example]]
-name = "multithreaded_control"
-path = "examples/multithreaded_control.rs"
-
-[[example]]
 name = "debug_temperature_control"
 path = "examples/debug_temperature_control.rs"
 required-features = ["debugging"]
