@@ -1,6 +1,4 @@
 use iggy::client::{Client, UserClient};
-#[cfg(feature = "debugging")]
-use iggy::clients::client::IggyClient;
 use iggy::messages::send_messages::{Message, Partitioning};
 use iggy::utils::duration::IggyDuration;
 #[cfg(feature = "debugging")]
@@ -51,9 +49,13 @@ impl Default for DebugConfig {
 #[derive(Serialize, Deserialize)]
 pub struct ControllerDebugData {
     /// Timestamp in milliseconds since UNIX epoch
-    pub timestamp: u128,
+    pub timestamp: u64,
     /// Controller ID
     pub controller_id: String,
+    /// Current setpoint (target value)
+    pub setpoint: f64,
+    /// Current process value (measurement)
+    pub process_value: f64,
     /// Current error value
     pub error: f64,
     /// Output signal
@@ -223,6 +225,8 @@ impl ControllerDebugger {
     /// Log the current state of the PID controller
     pub fn log_pid_state(
         &mut self,
+        setpoint: f64,
+        process_value: f64,
         error: f64,
         p_term: f64,
         i_term: f64,
@@ -230,12 +234,22 @@ impl ControllerDebugger {
         output: f64,
         _dt: f64,
     ) {
-        self.send_debug_data(error, output, p_term, i_term, d_term);
+        self.send_debug_data(
+            setpoint,
+            process_value,
+            error,
+            output,
+            p_term,
+            i_term,
+            d_term,
+        );
     }
 
     /// Send debug data
     pub fn send_debug_data(
         &mut self,
+        setpoint: f64,
+        process_value: f64,
         error: f64,
         output: f64,
         p_term: f64,
@@ -256,8 +270,10 @@ impl ControllerDebugger {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis(),
+                .as_millis() as u64,
             controller_id: self.config.controller_id.clone(),
+            setpoint,
+            process_value,
             error,
             output,
             p_term,

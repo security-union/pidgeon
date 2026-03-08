@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 pub struct PidControllerData {
     pub timestamp: u64,
     pub controller_id: String,
+    #[serde(default)]
+    pub setpoint: f64,
+    #[serde(default)]
+    pub process_value: f64,
     pub error: f64,
     pub output: f64,
     pub p_term: f64,

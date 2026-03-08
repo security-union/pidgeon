@@ -49,14 +49,13 @@ mod client_impl {
                         Ok(data) => {
                             info!("Received PID data for controller: {}", data.controller_id);
 
-                            // Update the signal with the new data
+                            // Update the signal with the new data (chronological order)
                             pid_data_clone.update(|data_vec| {
-                                // Add the new data to the front
-                                data_vec.insert(0, data);
+                                data_vec.push(data);
 
                                 // Limit the size of the data vector to prevent memory issues
                                 if data_vec.len() > 1000 {
-                                    data_vec.truncate(1000);
+                                    data_vec.drain(..data_vec.len() - 1000);
                                 }
                             });
                         }
