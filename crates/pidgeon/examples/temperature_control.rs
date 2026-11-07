@@ -37,7 +37,9 @@ fn main() {
 
         if step % 50 == 0 {
             let time = step as f64 * dt;
-            println!("t = {time:4.1} s  temperature = {temperature:5.2} °C  heater = {heater_power:5.1} %");
+            println!(
+                "t = {time:4.1} s  temperature = {temperature:5.2} °C  heater = {heater_power:5.1} %"
+            );
         }
     }
 
@@ -51,9 +53,11 @@ fn main() {
     );
 }
 
-fn format_seconds(seconds: Option<f64>) -> String {
-    match seconds {
-        Some(seconds) => format!("{seconds:.1} s"),
-        None => "not reached".to_string(),
+/// Rise time is NaN until the reading first gets within the settled band.
+fn format_seconds(seconds: f64) -> String {
+    if seconds.is_nan() {
+        "not reached".to_string()
+    } else {
+        format!("{seconds:.1} s")
     }
 }

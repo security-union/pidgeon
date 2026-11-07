@@ -175,7 +175,7 @@ impl ThreadSafePidController {
     /// Returns [`PidError::MutexPoisoned`], or [`PidError::InvalidParameter`] if
     /// either limit is NaN or `min >= max`.
     pub fn set_output_limits(&self, min: f64, max: f64) -> Result<(), PidError> {
-        self.with_lock(|controller| controller.set_output_limits(min, max))?
+        self.with_lock(|controller| controller.try_set_output_limits(min, max))?
     }
 
     /// Anti-windup toggle. See [`PidController::set_anti_windup`].
@@ -196,7 +196,8 @@ impl ThreadSafePidController {
         self.with_lock(|controller| controller.set_anti_windup_mode(mode))?
     }
 
-    /// Updates the deadband half-width at runtime.
+    /// Updates the deadband half-width at runtime. A negative value is taken as
+    /// its absolute value. See [`PidController::set_deadband`].
     ///
     /// # Errors
     ///

@@ -1,4 +1,4 @@
-use crate::compute::{pid_step, PidTerms};
+use crate::compute::{PidTerms, pid_step};
 use crate::config::ControllerConfig;
 use crate::enums::AntiWindupMode;
 use crate::error::PidError;
@@ -11,31 +11,25 @@ use crate::state::PidState;
 /// right for simulations that run faster than real time and for replayed logs.
 ///
 /// Metrics describe the response since the last [`PidController::reset`] or
-/// setpoint change. The first sample after that defines the step: its error `e0`
-/// is the step size, and its sign is the direction of travel.
+/// setpoint change. The first sample after that defines the step: the sign of its
+/// error is the direction of travel.
 ///
 /// Read them with [`PidController::get_statistics`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[non_exhaustive]
 pub struct ControllerStatistics {
     /// Mean absolute error across all samples.
     pub average_error: f64,
-    /// Largest absolute error observed (usually `|e0|`).
-    pub max_error: f64,
     /// Largest distance the process value went *past* the setpoint, in process
     /// units, in the direction of travel. `0.0` if it never crossed, or if the
     /// first sample had zero error (no step to overshoot).
     pub max_overshoot: f64,
-    /// 10%-90% rise time: time between the process value first covering 10% and
-    /// first covering 90% of the step. `None` until it has covered 90%, or if the
-    /// first sample had zero error. Resolution is one sample.
-    pub rise_time: Option<f64>,
     /// Time at which `|error|` last entered the settled band
     /// (see [`PidController::set_settled_threshold`]) and has stayed inside it
-    /// since. `None` while the error is outside the band.
-    pub settling_time: Option<f64>,
-    /// Total controller time covered by the samples.
-    pub elapsed_time: f64,
+    /// since. While the error is outside the band, this is the elapsed time so far.
+    pub settling_time: f64,
+    /// Time until `|error|` first entered the settled band. [`f64::NAN`] if it
+    /// never has.
+    pub rise_time: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -43,10 +37,8 @@ struct StatisticsTracker {
     elapsed: f64,
     abs_error_sum: f64,
     sample_count: u64,
-    max_error: f64,
-    initial_error: Option<f64>,
+    direction: Option<f64>,
     max_overshoot: f64,
-    rise_start: Option<f64>,
     rise_time: Option<f64>,
     settle_time: Option<f64>,
     settled_threshold: f64,
@@ -60,17 +52,14 @@ impl StatisticsTracker {
             elapsed: 0.0,
             abs_error_sum: 0.0,
             sample_count: 0,
-            max_error: 0.0,
-            initial_error: None,
+            direction: None,
             max_overshoot: 0.0,
-            rise_start: None,
             rise_time: None,
             settle_time: None,
             settled_threshold: DEFAULT_SETTLED_THRESHOLD,
         }
     }
 
-    /// Records one sample. `error` and `dt` must already be validated finite.
     fn update(&mut self, error: f64, dt: f64) {
         self.elapsed += dt;
         let now = self.elapsed;
@@ -78,25 +67,17 @@ impl StatisticsTracker {
 
         self.abs_error_sum += abs_error;
         self.sample_count += 1;
-        self.max_error = self.max_error.max(abs_error);
 
-        let initial_error = *self.initial_error.get_or_insert(error);
-        if initial_error != 0.0 {
-            // Fraction of the step covered: 0 at the start, 1 at the setpoint,
-            // above 1 once the process value has gone past it.
-            let progress = 1.0 - error / initial_error;
-            self.max_overshoot = self
-                .max_overshoot
-                .max((progress - 1.0) * initial_error.abs());
-            if self.rise_start.is_none() && progress >= 0.1 {
-                self.rise_start = Some(now);
-            }
-            if let (Some(start), None, true) = (self.rise_start, self.rise_time, progress >= 0.9) {
-                self.rise_time = Some(now - start);
-            }
-        }
+        // +1 for a step up, -1 for a step down, 0 if we started on the setpoint.
+        let direction =
+            *self
+                .direction
+                .get_or_insert(if error == 0.0 { 0.0 } else { error.signum() });
+        // Past the setpoint means the error has the opposite sign of the step.
+        self.max_overshoot = self.max_overshoot.max(-error * direction);
 
         if abs_error <= self.settled_threshold {
+            self.rise_time.get_or_insert(now);
             self.settle_time.get_or_insert(now);
         } else {
             self.settle_time = None;
@@ -111,15 +92,12 @@ impl StatisticsTracker {
         };
         ControllerStatistics {
             average_error,
-            max_error: self.max_error,
             max_overshoot: self.max_overshoot,
-            rise_time: self.rise_time,
-            settling_time: self.settle_time,
-            elapsed_time: self.elapsed,
+            settling_time: self.settle_time.unwrap_or(self.elapsed),
+            rise_time: self.rise_time.unwrap_or(f64::NAN),
         }
     }
 
-    /// Clears all metrics but keeps the configured threshold.
     fn reset(&mut self) {
         *self = StatisticsTracker {
             settled_threshold: self.settled_threshold,
@@ -262,12 +240,22 @@ impl PidController {
         self.try_update(|config| config.kd = kd)
     }
 
-    /// Updates the output clamp range at runtime.
+    /// Updates the output clamp range at runtime. Infinite values mean
+    /// "unbounded on that side".
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns [`PidError::InvalidParameter`] if either limit is NaN or `min >= max`.
-    pub fn set_output_limits(&mut self, min: f64, max: f64) -> Result<(), PidError> {
+    /// Panics if either limit is NaN or `min >= max`. The bad limits are never
+    /// stored. [`ThreadSafePidController::set_output_limits`](crate::ThreadSafePidController::set_output_limits)
+    /// returns an error instead.
+    pub fn set_output_limits(&mut self, min: f64, max: f64) {
+        if let Err(error) = self.try_set_output_limits(min, max) {
+            panic!("PidController::set_output_limits({min}, {max}): {error}");
+        }
+    }
+
+    /// Fallible form of [`set_output_limits`](Self::set_output_limits).
+    pub(crate) fn try_set_output_limits(&mut self, min: f64, max: f64) -> Result<(), PidError> {
         self.try_update(|config| {
             config.min_output = min;
             config.max_output = max;
@@ -311,27 +299,28 @@ impl PidController {
     }
 
     /// Sets the absolute error band, in process units, used for
+    /// [`ControllerStatistics::rise_time`] and
     /// [`ControllerStatistics::settling_time`]. Default: `0.05`.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns [`PidError::InvalidParameter`] if `threshold` is non-finite or negative.
-    pub fn set_settled_threshold(&mut self, threshold: f64) -> Result<(), PidError> {
-        if !threshold.is_finite() || threshold < 0.0 {
-            return Err(PidError::InvalidParameter(
-                "settled threshold must be a finite non-negative number",
-            ));
-        }
+    /// Panics if `threshold` is NaN, infinite or negative. The bad value is never
+    /// stored.
+    pub fn set_settled_threshold(&mut self, threshold: f64) {
+        assert!(
+            threshold.is_finite() && threshold >= 0.0,
+            "PidController::set_settled_threshold({threshold}): threshold must be a finite non-negative number"
+        );
         self.stats.settled_threshold = threshold;
-        Ok(())
     }
 
-    /// Updates the deadband half-width at runtime.
+    /// Updates the deadband half-width at runtime. A negative value is taken as
+    /// its absolute value, as in 0.3.
     ///
     /// # Errors
     ///
-    /// Returns [`PidError::InvalidParameter`] if `deadband` is non-finite or negative.
+    /// Returns [`PidError::InvalidParameter`] if `deadband` is non-finite.
     pub fn set_deadband(&mut self, deadband: f64) -> Result<(), PidError> {
-        self.try_update(|config| config.deadband = deadband)
+        self.try_update(|config| config.deadband = deadband.abs())
     }
 }

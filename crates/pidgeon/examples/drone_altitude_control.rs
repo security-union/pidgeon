@@ -12,18 +12,18 @@
 //! `controller.last_terms()` for the P/I/D chart.
 
 use crossterm::{
-    event::{self, Event, KeyCode},
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
+    event::{self, Event, KeyCode},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use pidgeon::{ControllerConfig, ThreadSafePidController};
 use ratatui::{
+    Frame, Terminal,
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols,
     text::{Line, Span},
     widgets::{Axis, Block, Borders, Chart, Dataset, Paragraph, Wrap},
-    Frame, Terminal,
 };
 use std::{
     io, thread,
@@ -201,7 +201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // 1/2 raise/lower Kp, 3/4 Ki, 5/6 Kd.
                         KeyCode::Char(key @ '1'..='6') => {
                             let index = key as u8 - b'1';
-                            let step = if index.is_multiple_of(2) {
+                            let step = if index % 2 == 0 {
                                 GAIN_STEP
                             } else {
                                 -GAIN_STEP
@@ -329,7 +329,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         time_step += 1;
 
         // Render at ~10fps
-        if time_step.is_multiple_of(2) {
+        if time_step % 2 == 0 {
             let time_min = if time > MAX_HISTORY_SECONDS {
                 time - MAX_HISTORY_SECONDS
             } else {
@@ -396,10 +396,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn format_seconds(seconds: Option<f64>) -> String {
-    match seconds {
-        Some(seconds) => format!("{seconds:.1} s"),
-        None => "not reached".to_string(),
+/// Rise time is NaN until the reading first gets within the settled band.
+fn format_seconds(seconds: f64) -> String {
+    if seconds.is_nan() {
+        "not reached".to_string()
+    } else {
+        format!("{seconds:.1} s")
     }
 }
 
@@ -1002,10 +1004,12 @@ fn render_chart(
     x_labels: &[Span],
     y_labels: &[&str],
 ) {
-    let datasets = vec![Dataset::default()
-        .marker(symbols::Marker::Braille)
-        .style(Style::default().fg(color))
-        .data(data)];
+    let datasets = vec![
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .style(Style::default().fg(color))
+            .data(data),
+    ];
 
     let y_label_spans: Vec<Span> = y_labels.iter().map(|s| Span::raw(*s)).collect();
 

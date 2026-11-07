@@ -1,4 +1,5 @@
-//! One test per bug fixed in 1.0. Each fails on 0.3.x.
+//! Regression tests for bugs fixed in 1.0 (the ones marked "0.3.x" fail on main),
+//! plus checks that 0.3 behaviour was kept.
 
 use crate::*;
 
@@ -15,18 +16,24 @@ fn default_builder_builds() {
     assert_eq!(ControllerConfig::default(), config);
 
     // One-sided limits are fine; NaN is not.
-    assert!(ControllerConfig::builder()
-        .with_output_limits(0.0, f64::INFINITY)
-        .build()
-        .is_ok());
-    assert!(ControllerConfig::builder()
-        .with_output_limits(f64::NAN, 1.0)
-        .build()
-        .is_err());
-    assert!(ControllerConfig::builder()
-        .with_output_limits(f64::INFINITY, f64::INFINITY)
-        .build()
-        .is_err());
+    assert!(
+        ControllerConfig::builder()
+            .with_output_limits(0.0, f64::INFINITY)
+            .build()
+            .is_ok()
+    );
+    assert!(
+        ControllerConfig::builder()
+            .with_output_limits(f64::NAN, 1.0)
+            .build()
+            .is_err()
+    );
+    assert!(
+        ControllerConfig::builder()
+            .with_output_limits(f64::INFINITY, f64::INFINITY)
+            .build()
+            .is_err()
+    );
 
     // Unbounded output never saturates.
     let (output, _) = pid_compute(&config, &PidState::default(), -1e12, 0.1).unwrap();
@@ -34,12 +41,19 @@ fn default_builder_builds() {
 }
 
 #[test]
-fn negative_deadband_is_rejected() {
-    // 0.3.x silently replaced it with abs().
-    assert!(ControllerConfig::builder()
+fn negative_deadband_is_taken_as_abs() {
+    // Same as 0.3.x: the builder keeps the magnitude. NaN is still rejected.
+    let config = ControllerConfig::builder()
         .with_deadband(-1.0)
         .build()
-        .is_err());
+        .unwrap();
+    assert_eq!(config.deadband(), 1.0);
+    assert!(
+        ControllerConfig::builder()
+            .with_deadband(f64::NAN)
+            .build()
+            .is_err()
+    );
 }
 
 #[test]

@@ -100,9 +100,10 @@ impl ControllerConfigBuilder {
     /// and integral terms (the derivative term still sees the full signal, in both
     /// [`DerivativeMode`]s). Outside the band the error is shrunk by `deadband`, so
     /// the P and I terms stay continuous at the band edge.
-    /// Must be finite and non-negative. Default: `0.0` (no deadband).
+    /// A negative value is taken as its absolute value. Must be finite.
+    /// Default: `0.0` (no deadband).
     pub fn with_deadband(mut self, deadband: f64) -> Self {
-        self.config.deadband = deadband;
+        self.config.deadband = deadband.abs();
         self
     }
 
@@ -133,7 +134,7 @@ impl ControllerConfigBuilder {
     /// Returns [`PidError::InvalidParameter`] if:
     /// - Any gain (`kp`, `ki`, `kd`) is non-finite.
     /// - `setpoint` is non-finite.
-    /// - `deadband` is non-finite or negative.
+    /// - `deadband` is non-finite (a negative value was already made positive).
     /// - Either output limit is NaN, or `min >= max`.
     /// - `derivative_filter_coeff` is non-finite or non-positive.
     /// - [`AntiWindupMode::BackCalculation`] has a non-finite or non-positive `tracking_time`.

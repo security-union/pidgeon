@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use pidgeon::{pid_compute, ControllerConfig, PidController, PidState, ThreadSafePidController};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use pidgeon::{ControllerConfig, PidController, PidState, ThreadSafePidController, pid_compute};
 use std::thread;
 
 const DT: f64 = 0.01;

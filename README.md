@@ -23,7 +23,7 @@ Pidgeon adds the parts the textbook equation leaves out: a filter on D so sensor
 pidgeon = "1.0"
 ```
 
-On a microcontroller, use `default-features = false` to get the `no_std` core. For WebAssembly, turn on the `wasm` feature.
+On a microcontroller, use `default-features = false` to get the `no_std` core. For WebAssembly, turn on the `wasm` feature. You need Rust 1.85 or newer.
 
 ## Quick start
 

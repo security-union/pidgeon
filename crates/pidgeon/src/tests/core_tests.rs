@@ -2,65 +2,87 @@ use crate::*;
 
 #[test]
 fn test_build_validates_config() {
-    assert!(ControllerConfig::builder()
-        .with_output_limits(-100.0, 100.0)
-        .build()
-        .is_ok());
+    assert!(
+        ControllerConfig::builder()
+            .with_output_limits(-100.0, 100.0)
+            .build()
+            .is_ok()
+    );
 
-    assert!(ControllerConfig::builder()
-        .with_kp(f64::NAN)
-        .with_output_limits(-100.0, 100.0)
-        .build()
-        .is_err());
-    assert!(ControllerConfig::builder()
-        .with_ki(f64::INFINITY)
-        .with_output_limits(-100.0, 100.0)
-        .build()
-        .is_err());
-    assert!(ControllerConfig::builder()
-        .with_kd(f64::NAN)
-        .with_output_limits(-100.0, 100.0)
-        .build()
-        .is_err());
+    assert!(
+        ControllerConfig::builder()
+            .with_kp(f64::NAN)
+            .with_output_limits(-100.0, 100.0)
+            .build()
+            .is_err()
+    );
+    assert!(
+        ControllerConfig::builder()
+            .with_ki(f64::INFINITY)
+            .with_output_limits(-100.0, 100.0)
+            .build()
+            .is_err()
+    );
+    assert!(
+        ControllerConfig::builder()
+            .with_kd(f64::NAN)
+            .with_output_limits(-100.0, 100.0)
+            .build()
+            .is_err()
+    );
 
-    assert!(ControllerConfig::builder()
-        .with_output_limits(100.0, -100.0)
-        .build()
-        .is_err());
-    assert!(ControllerConfig::builder()
-        .with_output_limits(0.0, 0.0)
-        .build()
-        .is_err());
+    assert!(
+        ControllerConfig::builder()
+            .with_output_limits(100.0, -100.0)
+            .build()
+            .is_err()
+    );
+    assert!(
+        ControllerConfig::builder()
+            .with_output_limits(0.0, 0.0)
+            .build()
+            .is_err()
+    );
 
-    assert!(ControllerConfig::builder()
-        .with_deadband(f64::NAN)
-        .with_output_limits(-1.0, 1.0)
-        .build()
-        .is_err());
+    assert!(
+        ControllerConfig::builder()
+            .with_deadband(f64::NAN)
+            .with_output_limits(-1.0, 1.0)
+            .build()
+            .is_err()
+    );
 
-    assert!(ControllerConfig::builder()
-        .with_derivative_filter_coeff(0.0)
-        .with_output_limits(-1.0, 1.0)
-        .build()
-        .is_err());
-    assert!(ControllerConfig::builder()
-        .with_derivative_filter_coeff(-1.0)
-        .with_output_limits(-1.0, 1.0)
-        .build()
-        .is_err());
+    assert!(
+        ControllerConfig::builder()
+            .with_derivative_filter_coeff(0.0)
+            .with_output_limits(-1.0, 1.0)
+            .build()
+            .is_err()
+    );
+    assert!(
+        ControllerConfig::builder()
+            .with_derivative_filter_coeff(-1.0)
+            .with_output_limits(-1.0, 1.0)
+            .build()
+            .is_err()
+    );
 
-    assert!(ControllerConfig::builder()
-        .with_anti_windup_mode(AntiWindupMode::BackCalculation {
-            tracking_time: -1.0,
-        })
-        .with_output_limits(-1.0, 1.0)
-        .build()
-        .is_err());
-    assert!(ControllerConfig::builder()
-        .with_anti_windup_mode(AntiWindupMode::BackCalculation { tracking_time: 0.0 })
-        .with_output_limits(-1.0, 1.0)
-        .build()
-        .is_err());
+    assert!(
+        ControllerConfig::builder()
+            .with_anti_windup_mode(AntiWindupMode::BackCalculation {
+                tracking_time: -1.0,
+            })
+            .with_output_limits(-1.0, 1.0)
+            .build()
+            .is_err()
+    );
+    assert!(
+        ControllerConfig::builder()
+            .with_anti_windup_mode(AntiWindupMode::BackCalculation { tracking_time: 0.0 })
+            .with_output_limits(-1.0, 1.0)
+            .build()
+            .is_err()
+    );
 }
 
 #[test]

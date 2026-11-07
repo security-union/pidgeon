@@ -171,7 +171,7 @@ fn test_parameter_validation() {
 
     assert!(controller.set_deadband(0.0).is_ok());
     assert!(controller.set_deadband(10.0).is_ok());
-    assert!(controller.set_deadband(-5.0).is_err());
+    assert!(controller.set_deadband(-5.0).is_ok());
     assert!(controller.set_deadband(f64::NAN).is_err());
     assert!(controller.set_deadband(f64::INFINITY).is_err());
 

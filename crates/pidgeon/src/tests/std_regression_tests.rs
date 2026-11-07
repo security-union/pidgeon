@@ -1,4 +1,5 @@
-//! One test per bug fixed in 1.0 in the stateful controllers. Each fails on 0.3.x.
+//! Regression tests for the stateful controllers (the ones marked "0.3.x" fail on
+//! main), plus checks that 0.3 behaviour was kept.
 
 use crate::*;
 
@@ -20,14 +21,25 @@ fn unity_controller(setpoint: f64) -> PidController {
 }
 
 #[test]
-fn invalid_output_limits_are_rejected_instead_of_panicking() {
-    // 0.3.x stored them unchecked and the next compute() panicked inside f64::clamp.
-    let mut controller = unity_controller(0.0);
-    assert!(controller.set_output_limits(5.0, -5.0).is_err());
-    assert!(controller.set_output_limits(f64::NAN, 1.0).is_err());
-    assert!(controller.set_output_limits(1.0, 1.0).is_err());
-    assert!(controller.compute(0.0, 0.1).is_ok());
+fn set_output_limits_panics_at_once_and_keeps_old_limits() {
+    // 0.3.x stored bad limits unchecked; the panic came later, inside the next
+    // compute(), from f64::clamp. Now the setter panics and nothing is stored.
+    for (min, max) in [(5.0, -5.0), (f64::NAN, 1.0), (1.0, 1.0)] {
+        let mut controller = unity_controller(0.0);
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.set_output_limits(min, max)
+        }));
+        assert!(
+            attempt.is_err(),
+            "set_output_limits({min}, {max}) must panic"
+        );
+        assert!(controller.compute(0.0, 0.1).is_ok());
+    }
+}
 
+#[test]
+fn thread_safe_set_output_limits_rejects_bad_limits() {
+    // 0.3.x returned Ok(()) and the next compute() panicked, poisoning the mutex.
     let shared = ThreadSafePidController::new(bounded_config(0.0));
     assert!(shared.set_output_limits(5.0, -5.0).is_err());
     assert!(shared.compute(0.0, 0.1).is_ok());
@@ -50,7 +62,6 @@ fn rejected_sample_does_not_poison_statistics() {
     controller.compute(0.5, 0.1).unwrap();
     let stats = controller.get_statistics();
     assert!(approx(stats.average_error, 0.5));
-    assert!(approx(stats.elapsed_time, 0.1));
 }
 
 #[test]
@@ -65,11 +76,9 @@ fn statistics_use_controller_time_not_wall_clock() {
         controller.compute(pv, 0.1).unwrap();
     }
     let stats = controller.get_statistics();
-    assert!(approx(stats.elapsed_time, 2.1));
     // |error| <= 0.05 first at pv = 1.0 (t = 0.9) and stays.
-    assert!(approx(stats.settling_time.unwrap(), 0.9));
-    // >= 10% first at pv = 0.125 (t = 0.2); >= 90% first at pv = 1.0 (t = 0.9).
-    assert!(approx(stats.rise_time.unwrap(), 0.7));
+    assert!(approx(stats.settling_time, 0.9));
+    assert!(approx(stats.rise_time, 0.9));
 }
 
 #[test]
@@ -79,9 +88,7 @@ fn overshoot_is_distance_past_setpoint_not_initial_error() {
     for pv in [0.0, 50.0, 90.0, 100.0] {
         controller.compute(pv, 0.1).unwrap();
     }
-    let stats = controller.get_statistics();
-    assert_eq!(stats.max_overshoot, 0.0);
-    assert_eq!(stats.max_error, 100.0);
+    assert_eq!(controller.get_statistics().max_overshoot, 0.0);
 
     for pv in [104.0, 107.0, 101.0] {
         controller.compute(pv, 0.1).unwrap();
@@ -97,13 +104,13 @@ fn overshoot_is_distance_past_setpoint_not_initial_error() {
 }
 
 #[test]
-fn unsettled_and_unrisen_are_none() {
-    // 0.3.x reported elapsed time as "settling time" when not settled and NaN rise time.
+fn unsettled_reports_elapsed_controller_time_and_nan_rise() {
     let mut controller = unity_controller(10.0);
     controller.compute(0.0, 0.1).unwrap();
+    controller.compute(0.0, 0.1).unwrap();
     let stats = controller.get_statistics();
-    assert_eq!(stats.rise_time, None);
-    assert_eq!(stats.settling_time, None);
+    assert!(stats.rise_time.is_nan());
+    assert!(approx(stats.settling_time, 0.2));
 }
 
 #[test]
@@ -112,22 +119,39 @@ fn setpoint_change_restarts_statistics() {
     controller.compute(0.0, 0.1).unwrap();
     controller.compute(10.0, 0.1).unwrap();
     controller.set_setpoint(10.0).unwrap(); // unchanged: keep
-    assert_eq!(controller.get_statistics().elapsed_time, 0.2);
+    assert!(approx(controller.get_statistics().average_error, 5.0));
     controller.set_setpoint(20.0).unwrap();
     let stats = controller.get_statistics();
-    assert_eq!(stats.elapsed_time, 0.0);
-    assert_eq!(stats.max_error, 0.0);
+    assert_eq!(stats.average_error, 0.0);
+    assert_eq!(stats.settling_time, 0.0);
+    assert!(stats.rise_time.is_nan());
 }
 
 #[test]
-fn settled_threshold_is_validated_and_survives_reset() {
+fn settled_threshold_panics_on_bad_values_and_survives_reset() {
     let mut controller = unity_controller(0.0);
-    assert!(controller.set_settled_threshold(f64::NAN).is_err());
-    assert!(controller.set_settled_threshold(-1.0).is_err());
-    controller.set_settled_threshold(2.0).unwrap();
+    for bad in [f64::NAN, -1.0, f64::INFINITY] {
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.set_settled_threshold(bad)
+        }));
+        assert!(attempt.is_err(), "set_settled_threshold({bad}) must panic");
+    }
+    controller.set_settled_threshold(2.0);
     controller.reset();
     controller.compute(1.5, 0.1).unwrap();
-    assert_eq!(controller.get_statistics().settling_time, Some(0.1));
+    assert!(approx(controller.get_statistics().settling_time, 0.1));
+    assert!(approx(controller.get_statistics().rise_time, 0.1));
+}
+
+#[test]
+fn negative_deadband_is_taken_as_abs_at_runtime() {
+    let mut controller = unity_controller(0.0);
+    controller.set_deadband(-2.0).unwrap();
+    assert_eq!(controller.config().deadband(), 2.0);
+    assert!(controller.set_deadband(f64::NAN).is_err());
+    let shared = ThreadSafePidController::new(bounded_config(0.0));
+    shared.set_deadband(-3.0).unwrap();
+    assert_eq!(shared.config().unwrap().deadband(), 3.0);
 }
 
 #[test]

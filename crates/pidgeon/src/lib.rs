@@ -88,7 +88,7 @@ mod controller;
 #[cfg(feature = "std")]
 mod thread_safe;
 
-pub use compute::{pid_compute, PidTerms};
+pub use compute::{PidTerms, pid_compute};
 pub use config::{ControllerConfig, ControllerConfigBuilder};
 pub use enums::{AntiWindupMode, DerivativeMode};
 pub use error::PidError;

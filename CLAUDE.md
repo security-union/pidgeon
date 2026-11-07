@@ -47,7 +47,7 @@ cargo run --example drone_altitude_control
 crates/pidgeon/src/
 ├── lib.rs              # Crate docs, feature table, re-exports
 ├── enums.rs            # DerivativeMode, AntiWindupMode
-├── error.rs            # PidError (#[non_exhaustive])
+├── error.rs            # PidError (MutexPoisoned gated behind std)
 ├── state.rs            # PidState (public fields)
 ├── config.rs           # ControllerConfigBuilder, ControllerConfig
 ├── compute.rs          # pid_compute() pure function, PidTerms
@@ -55,31 +55,33 @@ crates/pidgeon/src/
 ├── thread_safe.rs      # ThreadSafePidController (std-only)
 └── tests/
     ├── core_tests.rs             # no_std core: pid_compute, validation, config
-    ├── regression_tests.rs       # one test per 1.0 bug fix in the core; each fails on 0.3.x
+    ├── regression_tests.rs       # 1.0 bug fixes in the core (tests marked 0.3.x fail on main)
     ├── std_tests.rs              # PidController, ThreadSafePidController, threading
-    └── std_regression_tests.rs   # one test per 1.0 bug fix in the std types; each fails on 0.3.x
+    └── std_regression_tests.rs   # 1.0 bug fixes in the std types (tests marked 0.3.x fail on main)
 ```
 
 Regression tests are evidence for specific fixes. Don't delete them or weaken their assertions.
+
+1.0 keeps the 0.3 public API: same signatures, same `PidError` and `ControllerStatistics` shapes. Only additions are allowed (new methods, types, derives). The one removal is the `debugging` feature.
 
 Key types:
 
 #### `no_std`-compatible (available with `--no-default-features`)
 
-- **`ControllerConfigBuilder`** — From `ControllerConfig::builder()` or `config.to_builder()`. `.with_kp/ki/kd()`, `.with_output_limits()`, `.with_setpoint()`, `.with_deadband()`, `.with_anti_windup()` / `.with_anti_windup_mode()`, `.with_derivative_mode()`, `.with_derivative_filter_coeff()`, then `.build() -> Result<ControllerConfig, PidError>`.
+- **`ControllerConfigBuilder`** — From `ControllerConfig::builder()` or `config.to_builder()`. `.with_kp/ki/kd()`, `.with_output_limits()`, `.with_setpoint()`, `.with_deadband()` (takes `abs()`, as in 0.3), `.with_anti_windup()` / `.with_anti_windup_mode()`, `.with_derivative_mode()`, `.with_derivative_filter_coeff()`, then `.build() -> Result<ControllerConfig, PidError>`.
 - **`ControllerConfig`** — Validated, immutable, `Copy`. Private fields, getters. `Default` is the builder defaults: `kp = 1`, everything else off, limits `(-inf, +inf)`. `validate()` (crate-private) is shared by `build()` and every runtime setter.
 - **`PidState`** — Public fields: `integral_contribution`, `prev_error` (raw error, pre-deadband), `prev_measurement`, `prev_filtered_derivative`, `last_output`, `first_run`.
 - **`pid_compute(config, state, process_value, dt) -> Result<(f64, PidState), PidError>`** — Pure: no clock, no heap. Internally `pid_step()` also returns `PidTerms`.
 - **`PidTerms`** — `proportional`, `integral`, `derivative` behind one output. `output == clamp(sum)` in every anti-windup mode.
 - **`DerivativeMode`** — `OnError` | `OnMeasurement` (default).
 - **`AntiWindupMode`** — `None` | `Conditional` (default) | `BackCalculation { tracking_time }`.
-- **`PidError`** — `#[non_exhaustive]`. `InvalidParameter(&'static str)` and `MutexPoisoned`, both always present. `std::error::Error` impl only with `std`.
+- **`PidError`** — `InvalidParameter(&'static str)`, plus `MutexPoisoned` with `std` (same shape as 0.3). `std::error::Error` impl only with `std`.
 
 #### `std`-only (default feature)
 
-- **`PidController`** — Owns config, state and statistics. `compute(&mut self, pv, dt)`; a failed call changes nothing. `last_terms()`, `update_config()`, validated setters (`set_kp`, ..., `set_settled_threshold`). Statistics reset when the setpoint changes.
-- **`ThreadSafePidController`** — `Arc<Mutex<PidController>>`, `#[derive(Clone)]`, every clone shares one controller. Same methods taking `&self` and returning `Result` (`MutexPoisoned`). `get_control_signal()` returns the cached `last_output`.
-- **`ControllerStatistics`** — `#[non_exhaustive]`: `average_error`, `max_error`, `max_overshoot` (distance past the setpoint), `rise_time` (10-90%), `settling_time`, `elapsed_time`. Times are controller time (sum of `dt`), not wall clock. `rise_time`/`settling_time` are `None` until reached.
+- **`PidController`** — Owns config, state and statistics. `compute(&mut self, pv, dt)`; a failed call changes nothing. `last_terms()`, `update_config()`. Setters that returned `Result` in 0.3 still do and validate. `set_output_limits` and `set_settled_threshold` return `()` as in 0.3 and **panic** on invalid input (documented under `# Panics`), never storing it; `try_set_output_limits` (crate-private) is the fallible form. `set_deadband` takes `abs()` of a negative value. Statistics reset when the setpoint changes.
+- **`ThreadSafePidController`** — `Arc<Mutex<PidController>>`, `#[derive(Clone)]`, every clone shares one controller. Same methods taking `&self` and returning `Result` (`MutexPoisoned`); `set_output_limits` returns `Err` instead of panicking. `get_control_signal()` returns the cached `last_output`.
+- **`ControllerStatistics`** — Same fields as 0.3, all `f64`: `average_error`, `max_overshoot` (distance past the setpoint in the direction of the step), `settling_time` (when `|error|` last entered the settled band and stayed; elapsed time while unsettled), `rise_time` (time until `|error|` first entered the band; NaN if never). Times are controller time (sum of `dt`), not wall clock.
 
 #### Algorithm (`pid_compute` internals)
 
