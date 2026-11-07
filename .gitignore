@@ -1,5 +1,4 @@
 /target
 temperature_controller_debug.log
-crates/pidgeoneer/leptos_server.log
 .DS_Store
 /.vscode

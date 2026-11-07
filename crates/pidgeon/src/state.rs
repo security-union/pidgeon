@@ -1,10 +1,7 @@
-/// Persistent state carried between [`pid_compute`](crate::pid_compute) invocations.
+/// State carried between [`pid_compute`](crate::pid_compute) calls. Start with
+/// [`PidState::default()`].
 ///
-/// This struct is the "memory" of the controller. Pass it into [`pid_compute`](crate::pid_compute)
-/// and receive an updated copy back alongside the control output. Start with
-/// [`PidState::default()`] for a fresh controller.
-///
-/// All fields are public to support serialization, checkpointing, and testing.
+/// Fields are public so you can checkpoint, restore or inspect a controller.
 ///
 /// # Examples
 ///
@@ -21,28 +18,23 @@
 /// let (output, next_state) = pid_compute(&config, &state, 5.0, 0.01).unwrap();
 /// assert!(!next_state.first_run);
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PidState {
-    /// Accumulated integral contribution with Ki baked in: `sum(Ki * error * dt)`.
-    ///
-    /// This is *not* the raw integral of error -- it already includes the Ki gain,
-    /// so the P+I+D sum uses this value directly without further multiplication.
+    /// Integral term with Ki already applied: `sum(Ki * error * dt)`, added to the
+    /// output as is.
     pub integral_contribution: f64,
-    /// Error value (after deadband) from the previous time step. Used for
+    /// Raw error (`setpoint - process_value`, before deadband) from the previous
+    /// time step. Used for
     /// [`DerivativeMode::OnError`](crate::DerivativeMode::OnError) derivative calculation.
     pub prev_error: f64,
     /// Raw process value from the previous time step. Used for
     /// [`DerivativeMode::OnMeasurement`](crate::DerivativeMode::OnMeasurement) derivative calculation.
     pub prev_measurement: f64,
-    /// IIR-filtered derivative signal (without Kd). Kd is multiplied at output
-    /// time, so this field stores the filter state in "per-second" units, not the
-    /// final D contribution.
+    /// Low-pass filter state for the derivative, in units per second, before Kd.
     pub prev_filtered_derivative: f64,
     /// The clamped output from the most recent computation.
     pub last_output: f64,
-    /// `true` before the first call to [`pid_compute`](crate::pid_compute). On the first
-    /// run, the derivative term is zero (no previous measurement exists) and the
-    /// controller returns P+I rather than P+I+D.
+    /// `true` until the first step. That step has no previous sample, so its D is zero.
     pub first_run: bool,
 }
 

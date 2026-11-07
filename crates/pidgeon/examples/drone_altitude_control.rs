@@ -1,3 +1,16 @@
+//! Interactive terminal sim: a quadcopter holding altitude with a pidgeon controller.
+//!
+//! Run it with `cargo run --example drone_altitude_control`. The drone flies a
+//! scripted list of missions; you can take over at any time.
+//!
+//! Keys: Up/Down move the target altitude, `w`/`s` hit the drone with an up/down
+//! gust, `1`-`6` raise/lower Kp, Ki and Kd, `m` hands control back to the missions,
+//! `h` shows help, `q` quits.
+//!
+//! Almost all of this file is drawing. The control part is the `ControllerConfig`
+//! builder in `main`, one `controller.compute(altitude, DT)` call per tick, and
+//! `controller.last_terms()` for the P/I/D chart.
+
 use crossterm::{
     event::{self, Event, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -28,8 +41,8 @@ const WIND_GUST_STRENGTH: f64 = 4.0;
 const MAX_HISTORY_SECONDS: f64 = 60.0;
 const MAX_HISTORY_POINTS: usize = (MAX_HISTORY_SECONDS * CONTROL_RATE_HZ) as usize;
 
-// PID gain adjustment step
 const GAIN_STEP: f64 = 1.0;
+const MAX_GAIN: f64 = 50.0;
 
 // Missions
 struct Mission {
@@ -72,13 +85,11 @@ const MISSIONS: &[Mission] = &[
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Set up terminal
     enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
     let backend = ratatui::backend::CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    // Show intro screen
     loop {
         terminal.draw(draw_intro)?;
         if event::poll(Duration::from_millis(50))? {
@@ -95,20 +106,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // PID gains (mutable — user can tweak at runtime)
+    // Mutable because the 1-6 keys change them at runtime.
     let mut kp = 10.0_f64;
     let mut ki = 5.0_f64;
     let mut kd = 8.0_f64;
 
-    // Set up PID controller
     let config = ControllerConfig::builder()
         .with_kp(kp)
         .with_ki(ki)
         .with_kd(kd)
-        .with_output_limits(0.0, 100.0)
+        .with_output_limits(0.0, 100.0) // % of max thrust
         .with_setpoint(INITIAL_SETPOINT)
-        .with_deadband(0.0)
-        .with_anti_windup(true)
         .build()
         .expect("Invalid PID config");
 
@@ -128,11 +136,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut setpoint = INITIAL_SETPOINT;
     let mut pending_gust: Option<f64> = None;
     let mut auto_missions = true;
-
-    // PID term tracking (computed locally to mirror the controller)
-    let mut integral_accum = 0.0_f64;
-    let mut prev_measurement = 0.0_f64;
-    let mut first_run = true;
 
     // Mission tracking
     let mut current_mission_idx: usize = 0;
@@ -157,7 +160,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
 
     loop {
-        // Handle input
         if event::poll(Duration::from_millis(0))? {
             if let Event::Key(key) = event::read()? {
                 if show_help {
@@ -169,102 +171,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         paused_duration += ps.elapsed();
                     }
                 } else {
-                    match key.code {
+                    let event = match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Up => {
+                        KeyCode::Up | KeyCode::Down => {
+                            let step = if key.code == KeyCode::Up {
+                                SETPOINT_STEP
+                            } else {
+                                -SETPOINT_STEP
+                            };
                             auto_missions = false;
-                            setpoint = (setpoint + SETPOINT_STEP).min(MAX_SETPOINT);
+                            setpoint = (setpoint + step).clamp(MIN_SETPOINT, MAX_SETPOINT);
                             controller
                                 .set_setpoint(setpoint)
-                                .expect("Failed to set setpoint");
-                            let msg = format!("Manual override: target {setpoint:.0}m");
-                            current_event = msg.clone();
-                            event_log.push((time_step as f64 * DT, msg));
+                                .expect("setpoint is finite");
                             mission_text = format!("MANUAL: Hold at {setpoint:.0}m");
+                            Some(format!("Manual override: target {setpoint:.0}m"))
                         }
-                        KeyCode::Down => {
-                            auto_missions = false;
-                            setpoint = (setpoint - SETPOINT_STEP).max(MIN_SETPOINT);
-                            controller
-                                .set_setpoint(setpoint)
-                                .expect("Failed to set setpoint");
-                            let msg = format!("Manual override: target {setpoint:.0}m");
-                            current_event = msg.clone();
-                            event_log.push((time_step as f64 * DT, msg));
-                            mission_text = format!("MANUAL: Hold at {setpoint:.0}m");
+                        KeyCode::Char(key @ ('w' | 's')) => {
+                            let (gust, direction) = if key == 'w' {
+                                (WIND_GUST_STRENGTH, "up, +")
+                            } else {
+                                (-WIND_GUST_STRENGTH, "down, -")
+                            };
+                            pending_gust = Some(gust);
+                            Some(format!(
+                                "WIND GUST ({direction}{WIND_GUST_STRENGTH:.1} m/s)"
+                            ))
                         }
-                        KeyCode::Char('w') => {
-                            pending_gust = Some(WIND_GUST_STRENGTH);
-                            let msg = format!("WIND GUST (up, +{WIND_GUST_STRENGTH:.1} m/s)");
-                            current_event = msg.clone();
-                            event_log.push((time_step as f64 * DT, msg));
-                        }
-                        KeyCode::Char('s') => {
-                            pending_gust = Some(-WIND_GUST_STRENGTH);
-                            let msg = format!("WIND GUST (down, -{WIND_GUST_STRENGTH:.1} m/s)");
-                            current_event = msg.clone();
-                            event_log.push((time_step as f64 * DT, msg));
-                        }
-                        // PID gain controls
-                        KeyCode::Char('1') => {
-                            kp = (kp + GAIN_STEP).min(50.0);
-                            controller.set_kp(kp).expect("Failed to set Kp");
-                            let msg = format!("Kp = {kp:.1}");
-                            current_event = msg.clone();
-                            event_log.push((time_step as f64 * DT, msg));
-                        }
-                        KeyCode::Char('2') => {
-                            kp = (kp - GAIN_STEP).max(0.0);
-                            controller.set_kp(kp).expect("Failed to set Kp");
-                            let msg = format!("Kp = {kp:.1}");
-                            current_event = msg.clone();
-                            event_log.push((time_step as f64 * DT, msg));
-                        }
-                        KeyCode::Char('3') => {
-                            ki = (ki + GAIN_STEP).min(50.0);
-                            controller.set_ki(ki).expect("Failed to set Ki");
-                            let msg = format!("Ki = {ki:.1}");
-                            current_event = msg.clone();
-                            event_log.push((time_step as f64 * DT, msg));
-                        }
-                        KeyCode::Char('4') => {
-                            ki = (ki - GAIN_STEP).max(0.0);
-                            controller.set_ki(ki).expect("Failed to set Ki");
-                            let msg = format!("Ki = {ki:.1}");
-                            current_event = msg.clone();
-                            event_log.push((time_step as f64 * DT, msg));
-                        }
-                        KeyCode::Char('5') => {
-                            kd = (kd + GAIN_STEP).min(50.0);
-                            controller.set_kd(kd).expect("Failed to set Kd");
-                            let msg = format!("Kd = {kd:.1}");
-                            current_event = msg.clone();
-                            event_log.push((time_step as f64 * DT, msg));
-                        }
-                        KeyCode::Char('6') => {
-                            kd = (kd - GAIN_STEP).max(0.0);
-                            controller.set_kd(kd).expect("Failed to set Kd");
-                            let msg = format!("Kd = {kd:.1}");
-                            current_event = msg.clone();
-                            event_log.push((time_step as f64 * DT, msg));
+                        // 1/2 raise/lower Kp, 3/4 Ki, 5/6 Kd.
+                        KeyCode::Char(key @ '1'..='6') => {
+                            let index = key as u8 - b'1';
+                            let step = if index.is_multiple_of(2) {
+                                GAIN_STEP
+                            } else {
+                                -GAIN_STEP
+                            };
+                            let (name, gain) = match index / 2 {
+                                0 => ("Kp", &mut kp),
+                                1 => ("Ki", &mut ki),
+                                _ => ("Kd", &mut kd),
+                            };
+                            *gain = (*gain + step).clamp(0.0, MAX_GAIN);
+                            let message = format!("{name} = {gain:.1}");
+                            controller.set_kp(kp).expect("gain is finite");
+                            controller.set_ki(ki).expect("gain is finite");
+                            controller.set_kd(kd).expect("gain is finite");
+                            Some(message)
                         }
                         KeyCode::Char('h') => {
                             show_help = true;
                             pause_start = Some(Instant::now());
+                            None
                         }
                         KeyCode::Char('m') => {
                             auto_missions = true;
-                            current_event = "Auto-pilot re-engaged".into();
-                            event_log
-                                .push((time_step as f64 * DT, "Auto-pilot re-engaged".to_string()));
+                            Some("Auto-pilot re-engaged".to_string())
                         }
-                        _ => {}
+                        _ => None,
+                    };
+                    if let Some(message) = event {
+                        current_event = message.clone();
+                        event_log.push((time_step as f64 * DT, message));
                     }
                 }
             }
         }
 
-        // Pause simulation while help is shown
         if show_help {
             terminal.draw(draw_intro)?;
             thread::sleep(Duration::from_millis(50));
@@ -273,7 +245,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let time = time_step as f64 * DT;
 
-        // Check for mission triggers
         if auto_missions && current_mission_idx < MISSIONS.len() {
             let mission = &MISSIONS[current_mission_idx];
             if time >= mission.trigger_time {
@@ -289,38 +260,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // Apply pending wind gust
         if let Some(gust) = pending_gust.take() {
             velocity += gust;
         }
 
-        // PID compute
-        let control_signal = controller.compute(altitude, DT).expect("Failed to compute");
+        let control_signal = controller
+            .compute(altitude, DT)
+            .expect("altitude is finite and DT > 0");
+        let terms = controller.last_terms().expect("lock is not poisoned");
 
-        // Compute PID terms locally (mirrors the controller's internal math)
-        let signed_error = setpoint - altitude;
-        let p_term = kp * signed_error;
-        integral_accum += ki * signed_error * DT;
-        // Clamp integral to output range to approximate anti-windup
-        integral_accum = integral_accum.clamp(0.0, 100.0);
-        let i_term = integral_accum;
-        let d_term = if first_run {
-            first_run = false;
-            0.0
-        } else {
-            // Derivative-on-measurement (negated)
-            let raw_deriv = -(altitude - prev_measurement) / DT;
-            kd * raw_deriv
-        };
-        prev_measurement = altitude;
-
-        // Motor response delay
+        // The motors lag the command; the command is % of max thrust.
         commanded_thrust += (control_signal - commanded_thrust) * DT / motor_response_delay;
-
-        // Convert to Newtons
         let thrust = commanded_thrust * max_thrust / 100.0;
 
-        // Physics
         let weight = drone_mass * gravity;
         let drag = drag_coefficient * velocity.abs() * velocity;
         let accel = (thrust - weight - drag) / drone_mass;
@@ -339,9 +291,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         velocity_data.push((time, velocity));
         thrust_data.push((time, commanded_thrust));
         error_data.push((time, setpoint - altitude));
-        p_term_data.push((time, p_term));
-        i_term_data.push((time, i_term));
-        d_term_data.push((time, d_term));
+        p_term_data.push((time, terms.proportional));
+        i_term_data.push((time, terms.integral));
+        d_term_data.push((time, terms.derivative));
 
         if altitude_data.len() > MAX_HISTORY_POINTS {
             altitude_data.remove(0);
@@ -424,11 +376,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Restore terminal
     disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;
 
-    // Print stats
     let stats = controller
         .get_statistics()
         .expect("Failed to get statistics");
@@ -440,10 +390,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Final altitude:  {:.2} m", altitude);
     println!("Average error:   {:.2} m", stats.average_error);
     println!("Max overshoot:   {:.2} m", stats.max_overshoot);
-    println!("Rise time:       {:.1} s", stats.rise_time);
-    println!("Settling time:   {:.1} s", stats.settling_time);
+    println!("Rise time:       {}", format_seconds(stats.rise_time));
+    println!("Settling time:   {}", format_seconds(stats.settling_time));
 
     Ok(())
+}
+
+fn format_seconds(seconds: Option<f64>) -> String {
+    match seconds {
+        Some(seconds) => format!("{seconds:.1} s"),
+        None => "not reached".to_string(),
+    }
 }
 
 fn draw_intro(f: &mut Frame) {

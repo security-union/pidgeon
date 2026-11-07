@@ -1,14 +1,11 @@
 use std::sync::{Arc, Mutex};
 
+use crate::compute::PidTerms;
 use crate::config::ControllerConfig;
 use crate::controller::{ControllerStatistics, PidController};
+use crate::enums::AntiWindupMode;
 use crate::error::PidError;
-
-#[cfg(feature = "debugging")]
-use crate::controller::StatisticsTracker;
-
-#[cfg(feature = "debugging")]
-use crate::debug::{ControllerDebugger, DebugConfig};
+use crate::state::PidState;
 
 /// Thread-safe PID controller backed by `Arc<Mutex<PidController>>`.
 ///
@@ -31,7 +28,6 @@ use crate::debug::{ControllerDebugger, DebugConfig};
 /// let controller = ThreadSafePidController::new(config);
 /// let handle = controller.clone(); // same controller, different handle
 ///
-/// // Use from another thread
 /// std::thread::spawn(move || {
 ///     let output = handle.compute(90.0, 0.01).unwrap();
 ///     assert!(output > 0.0);
@@ -39,16 +35,9 @@ use crate::debug::{ControllerDebugger, DebugConfig};
 /// .join()
 /// .unwrap();
 /// ```
+#[derive(Clone)]
 pub struct ThreadSafePidController {
     controller: Arc<Mutex<PidController>>,
-}
-
-impl Clone for ThreadSafePidController {
-    fn clone(&self) -> Self {
-        ThreadSafePidController {
-            controller: Arc::clone(&self.controller),
-        }
-    }
 }
 
 impl ThreadSafePidController {
@@ -59,6 +48,16 @@ impl ThreadSafePidController {
         }
     }
 
+    /// Runs `action` with the lock held. Every public method goes through here,
+    /// so each one is a single atomic step with respect to the others.
+    fn with_lock<T>(&self, action: impl FnOnce(&mut PidController) -> T) -> Result<T, PidError> {
+        let mut controller = self
+            .controller
+            .lock()
+            .map_err(|_| PidError::MutexPoisoned)?;
+        Ok(action(&mut controller))
+    }
+
     /// Runs one PID iteration. See [`PidController::compute`] for details.
     ///
     /// # Errors
@@ -66,11 +65,7 @@ impl ThreadSafePidController {
     /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned, or
     /// [`PidError::InvalidParameter`] if inputs are invalid.
     pub fn compute(&self, process_value: f64, dt: f64) -> Result<f64, PidError> {
-        let mut controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        controller.compute(process_value, dt)
+        self.with_lock(|controller| controller.compute(process_value, dt))?
     }
 
     /// Resets controller state and statistics. See [`PidController::reset`].
@@ -79,25 +74,44 @@ impl ThreadSafePidController {
     ///
     /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned.
     pub fn reset(&self) -> Result<(), PidError> {
-        let mut controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        controller.reset();
-        Ok(())
+        self.with_lock(PidController::reset)
     }
 
-    /// Returns the most recent clamped control output.
+    /// Returns the most recent clamped control output without recomputing.
     ///
     /// # Errors
     ///
     /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned.
     pub fn get_control_signal(&self) -> Result<f64, PidError> {
-        let controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        Ok(controller.state.last_output)
+        self.with_lock(|controller| controller.state.last_output)
+    }
+
+    /// Returns a copy of the current configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned.
+    pub fn config(&self) -> Result<ControllerConfig, PidError> {
+        self.with_lock(|controller| controller.config)
+    }
+
+    /// Returns a copy of the current controller state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned.
+    pub fn state(&self) -> Result<PidState, PidError> {
+        self.with_lock(|controller| controller.state)
+    }
+
+    /// Returns the P, I and D contributions behind the most recent output.
+    /// See [`PidController::last_terms`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned.
+    pub fn last_terms(&self) -> Result<PidTerms, PidError> {
+        self.with_lock(|controller| controller.last_terms)
     }
 
     /// Updates the setpoint. See [`PidController::set_setpoint`].
@@ -106,38 +120,25 @@ impl ThreadSafePidController {
     ///
     /// Returns [`PidError::MutexPoisoned`] or [`PidError::InvalidParameter`].
     pub fn set_setpoint(&self, setpoint: f64) -> Result<(), PidError> {
-        let mut controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        controller.set_setpoint(setpoint)
+        self.with_lock(|controller| controller.set_setpoint(setpoint))?
     }
 
-    /// Replaces the entire configuration. State and statistics are preserved.
+    /// Replaces the entire configuration. See [`PidController::update_config`].
     ///
     /// # Errors
     ///
     /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned.
     pub fn update_config(&self, config: ControllerConfig) -> Result<(), PidError> {
-        let mut controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        controller.config = config;
-        Ok(())
+        self.with_lock(|controller| controller.update_config(config))
     }
 
-    /// Returns a snapshot of performance statistics.
+    /// Returns a snapshot of step-response statistics.
     ///
     /// # Errors
     ///
     /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned.
     pub fn get_statistics(&self) -> Result<ControllerStatistics, PidError> {
-        let controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        Ok(controller.get_statistics())
+        self.with_lock(|controller| controller.get_statistics())
     }
 
     /// Updates the proportional gain at runtime.
@@ -146,11 +147,7 @@ impl ThreadSafePidController {
     ///
     /// Returns [`PidError::MutexPoisoned`] or [`PidError::InvalidParameter`].
     pub fn set_kp(&self, kp: f64) -> Result<(), PidError> {
-        let mut controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        controller.set_kp(kp)
+        self.with_lock(|controller| controller.set_kp(kp))?
     }
 
     /// Updates the integral gain at runtime.
@@ -159,11 +156,7 @@ impl ThreadSafePidController {
     ///
     /// Returns [`PidError::MutexPoisoned`] or [`PidError::InvalidParameter`].
     pub fn set_ki(&self, ki: f64) -> Result<(), PidError> {
-        let mut controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        controller.set_ki(ki)
+        self.with_lock(|controller| controller.set_ki(ki))?
     }
 
     /// Updates the derivative gain at runtime.
@@ -172,25 +165,35 @@ impl ThreadSafePidController {
     ///
     /// Returns [`PidError::MutexPoisoned`] or [`PidError::InvalidParameter`].
     pub fn set_kd(&self, kd: f64) -> Result<(), PidError> {
-        let mut controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        controller.set_kd(kd)
+        self.with_lock(|controller| controller.set_kd(kd))?
     }
 
     /// Updates the output clamp range at runtime.
     ///
     /// # Errors
     ///
-    /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned.
+    /// Returns [`PidError::MutexPoisoned`], or [`PidError::InvalidParameter`] if
+    /// either limit is NaN or `min >= max`.
     pub fn set_output_limits(&self, min: f64, max: f64) -> Result<(), PidError> {
-        let mut controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        controller.set_output_limits(min, max);
-        Ok(())
+        self.with_lock(|controller| controller.set_output_limits(min, max))?
+    }
+
+    /// Anti-windup toggle. See [`PidController::set_anti_windup`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned.
+    pub fn set_anti_windup(&self, enable: bool) -> Result<(), PidError> {
+        self.with_lock(|controller| controller.set_anti_windup(enable))
+    }
+
+    /// Sets the anti-windup strategy. See [`PidController::set_anti_windup_mode`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PidError::MutexPoisoned`] or [`PidError::InvalidParameter`].
+    pub fn set_anti_windup_mode(&self, mode: AntiWindupMode) -> Result<(), PidError> {
+        self.with_lock(|controller| controller.set_anti_windup_mode(mode))?
     }
 
     /// Updates the deadband half-width at runtime.
@@ -199,47 +202,6 @@ impl ThreadSafePidController {
     ///
     /// Returns [`PidError::MutexPoisoned`] or [`PidError::InvalidParameter`].
     pub fn set_deadband(&self, deadband: f64) -> Result<(), PidError> {
-        let mut controller = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-        controller.set_deadband(deadband)
-    }
-
-    /// Attaches a debugger that streams PID telemetry via Iggy.rs.
-    /// Only available with the `debugging` feature.
-    ///
-    /// Consumes and returns `self` because the internal controller must be
-    /// reconstructed with the debugger attached.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PidError::MutexPoisoned`] if the mutex was poisoned.
-    #[cfg(feature = "debugging")]
-    pub fn with_debugging(self, debug_config: DebugConfig) -> Result<Self, PidError> {
-        let lock = self
-            .controller
-            .lock()
-            .map_err(|_| PidError::MutexPoisoned)?;
-
-        let pid_controller = PidController {
-            config: lock.config.clone(),
-            state: lock.state.clone(),
-            stats: StatisticsTracker {
-                start_time: lock.stats.start_time,
-                error_sum: lock.stats.error_sum,
-                error_count: lock.stats.error_count,
-                max_error: lock.stats.max_error,
-                reached_setpoint: lock.stats.reached_setpoint,
-                rise_time: lock.stats.rise_time,
-                settle_time: lock.stats.settle_time,
-                settled_threshold: lock.stats.settled_threshold,
-            },
-            debugger: Some(ControllerDebugger::new(debug_config)),
-        };
-
-        Ok(ThreadSafePidController {
-            controller: Arc::new(Mutex::new(pid_controller)),
-        })
+        self.with_lock(|controller| controller.set_deadband(deadband))?
     }
 }
