@@ -225,12 +225,14 @@ impl ControllerConfig {
                 "derivative_filter_coeff must be a finite positive number",
             ));
         }
-        if let AntiWindupMode::BackCalculation { tracking_time } = self.anti_windup_mode {
-            if !tracking_time.is_finite() || tracking_time <= 0.0 {
-                return Err(PidError::InvalidParameter(
-                    "back-calculation tracking_time must be a finite positive number",
-                ));
-            }
+        if matches!(
+            self.anti_windup_mode,
+            AntiWindupMode::BackCalculation { tracking_time }
+                if !tracking_time.is_finite() || tracking_time <= 0.0
+        ) {
+            return Err(PidError::InvalidParameter(
+                "back-calculation tracking_time must be a finite positive number",
+            ));
         }
         Ok(())
     }

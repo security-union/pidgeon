@@ -92,16 +92,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         terminal.draw(draw_intro)?;
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => {
-                        disable_raw_mode()?;
-                        io::stdout().execute(LeaveAlternateScreen)?;
-                        return Ok(());
-                    }
-                    _ => break,
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => {
+                    disable_raw_mode()?;
+                    io::stdout().execute(LeaveAlternateScreen)?;
+                    return Ok(());
                 }
+                _ => break,
             }
         }
     }
@@ -160,79 +160,79 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
 
     loop {
-        if event::poll(Duration::from_millis(0))? {
-            if let Event::Key(key) = event::read()? {
-                if show_help {
-                    if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
-                        break;
+        if event::poll(Duration::from_millis(0))?
+            && let Event::Key(key) = event::read()?
+        {
+            if show_help {
+                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+                    break;
+                }
+                show_help = false;
+                if let Some(ps) = pause_start.take() {
+                    paused_duration += ps.elapsed();
+                }
+            } else {
+                let event = match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Up | KeyCode::Down => {
+                        let step = if key.code == KeyCode::Up {
+                            SETPOINT_STEP
+                        } else {
+                            -SETPOINT_STEP
+                        };
+                        auto_missions = false;
+                        setpoint = (setpoint + step).clamp(MIN_SETPOINT, MAX_SETPOINT);
+                        controller
+                            .set_setpoint(setpoint)
+                            .expect("setpoint is finite");
+                        mission_text = format!("MANUAL: Hold at {setpoint:.0}m");
+                        Some(format!("Manual override: target {setpoint:.0}m"))
                     }
-                    show_help = false;
-                    if let Some(ps) = pause_start.take() {
-                        paused_duration += ps.elapsed();
+                    KeyCode::Char(key @ ('w' | 's')) => {
+                        let (gust, direction) = if key == 'w' {
+                            (WIND_GUST_STRENGTH, "up, +")
+                        } else {
+                            (-WIND_GUST_STRENGTH, "down, -")
+                        };
+                        pending_gust = Some(gust);
+                        Some(format!(
+                            "WIND GUST ({direction}{WIND_GUST_STRENGTH:.1} m/s)"
+                        ))
                     }
-                } else {
-                    let event = match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Up | KeyCode::Down => {
-                            let step = if key.code == KeyCode::Up {
-                                SETPOINT_STEP
-                            } else {
-                                -SETPOINT_STEP
-                            };
-                            auto_missions = false;
-                            setpoint = (setpoint + step).clamp(MIN_SETPOINT, MAX_SETPOINT);
-                            controller
-                                .set_setpoint(setpoint)
-                                .expect("setpoint is finite");
-                            mission_text = format!("MANUAL: Hold at {setpoint:.0}m");
-                            Some(format!("Manual override: target {setpoint:.0}m"))
-                        }
-                        KeyCode::Char(key @ ('w' | 's')) => {
-                            let (gust, direction) = if key == 'w' {
-                                (WIND_GUST_STRENGTH, "up, +")
-                            } else {
-                                (-WIND_GUST_STRENGTH, "down, -")
-                            };
-                            pending_gust = Some(gust);
-                            Some(format!(
-                                "WIND GUST ({direction}{WIND_GUST_STRENGTH:.1} m/s)"
-                            ))
-                        }
-                        // 1/2 raise/lower Kp, 3/4 Ki, 5/6 Kd.
-                        KeyCode::Char(key @ '1'..='6') => {
-                            let index = key as u8 - b'1';
-                            let step = if index % 2 == 0 {
-                                GAIN_STEP
-                            } else {
-                                -GAIN_STEP
-                            };
-                            let (name, gain) = match index / 2 {
-                                0 => ("Kp", &mut kp),
-                                1 => ("Ki", &mut ki),
-                                _ => ("Kd", &mut kd),
-                            };
-                            *gain = (*gain + step).clamp(0.0, MAX_GAIN);
-                            let message = format!("{name} = {gain:.1}");
-                            controller.set_kp(kp).expect("gain is finite");
-                            controller.set_ki(ki).expect("gain is finite");
-                            controller.set_kd(kd).expect("gain is finite");
-                            Some(message)
-                        }
-                        KeyCode::Char('h') => {
-                            show_help = true;
-                            pause_start = Some(Instant::now());
-                            None
-                        }
-                        KeyCode::Char('m') => {
-                            auto_missions = true;
-                            Some("Auto-pilot re-engaged".to_string())
-                        }
-                        _ => None,
-                    };
-                    if let Some(message) = event {
-                        current_event = message.clone();
-                        event_log.push((time_step as f64 * DT, message));
+                    // 1/2 raise/lower Kp, 3/4 Ki, 5/6 Kd.
+                    KeyCode::Char(key @ '1'..='6') => {
+                        let index = key as u8 - b'1';
+                        let step = if index.is_multiple_of(2) {
+                            GAIN_STEP
+                        } else {
+                            -GAIN_STEP
+                        };
+                        let (name, gain) = match index / 2 {
+                            0 => ("Kp", &mut kp),
+                            1 => ("Ki", &mut ki),
+                            _ => ("Kd", &mut kd),
+                        };
+                        *gain = (*gain + step).clamp(0.0, MAX_GAIN);
+                        let message = format!("{name} = {gain:.1}");
+                        controller.set_kp(kp).expect("gain is finite");
+                        controller.set_ki(ki).expect("gain is finite");
+                        controller.set_kd(kd).expect("gain is finite");
+                        Some(message)
                     }
+                    KeyCode::Char('h') => {
+                        show_help = true;
+                        pause_start = Some(Instant::now());
+                        None
+                    }
+                    KeyCode::Char('m') => {
+                        auto_missions = true;
+                        Some("Auto-pilot re-engaged".to_string())
+                    }
+                    _ => None,
+                };
+                if let Some(message) = event {
+                    current_event = message.clone();
+                    event_log.push((time_step as f64 * DT, message));
                 }
             }
         }
@@ -329,7 +329,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         time_step += 1;
 
         // Render at ~10fps
-        if time_step % 2 == 0 {
+        if time_step.is_multiple_of(2) {
             let time_min = if time > MAX_HISTORY_SECONDS {
                 time - MAX_HISTORY_SECONDS
             } else {
