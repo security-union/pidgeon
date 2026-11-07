@@ -1,6 +1,6 @@
 [package]
 name = "pidgeon"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "PID controller with a filtered derivative, anti-windup and output limits. Pure no_std core plus a thread-safe wrapper."
 authors = ["Dario Alessandro"]
