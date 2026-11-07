@@ -10,42 +10,49 @@ D[k] = (1-alpha) * D[k-1] + alpha * Kd * (x[k] - x[k-1]) / T
 alpha = N*T / (1 + N*T)
 ```
 
-Where x = error (OnError) or x = -pv (OnMeasurement).
+Where x = raw error (OnError) or x = -pv (OnMeasurement).
 
-Verified: alpha -> 1 as N -> inf (no filtering), alpha -> 0 as N -> 0 (full filtering).
+alpha -> 1 as N -> inf (no filtering), alpha -> 0 as N -> 0 (full filtering).
+The filter's corner frequency is N rad/s, i.e. N/(2*pi) Hz.
 
 ## Back-Calculation Anti-Windup
 
-Given integral stores raw sum(e*dt) (no Ki):
+The integral stores `I = Ki * sum(e*dt)`. Tracking equation:
 ```
-integral += e*dt + saturation_error / (Tt * Ki) * dt
+dI/dt = Ki*e + (u_sat - u_unsat) / Tt
 ```
 
-The 1/(Tt*Ki) is correct because:
-- Tracking equation for Ki*integral: d/dt(Ki*I) = Ki*e + (1/Tt)*(u_sat - u_unsat)
-- Dividing by Ki: d/dt(I) = e + 1/(Tt*Ki) * saturation_error
+With `I_cand = I + Ki*e*dt` and `u_unsat = P + I_cand + D`, solving the
+correction implicitly (backward Euler, u depends on the new I) gives:
+```
+I_new = I_cand + dt / (Tt + dt) * (u_sat - u_unsat)
+```
 
-Default Tt:
-- PID: Tt = sqrt(Kd/Ki)
-- PI (Kd=0): Tt = Kp/Ki (= Ti)
-- Ki=0: anti-windup disabled
+The gain dt/(Tt+dt) is in (0, 1) for any dt > 0, so it never overcorrects.
+The explicit gain dt/Tt exceeds 2 once dt > 2*Tt and the integral diverges.
+No division by Ki, because Ki is already inside I.
+
+## Conditional Anti-Windup
+
+Freeze integration only while the output is saturated AND the integral step
+pushes further into that limit. Freezing on saturation alone traps an integral
+that is already past the limit (e.g. after limits are tightened at runtime).
 
 ## OnMeasurement Derivative
 
-Proof of equivalence when setpoint constant:
-e[k] - e[k-1] = -(pv[k] - pv[k-1])  when r is constant.
+When the setpoint r is constant: e[k] - e[k-1] = -(pv[k] - pv[k-1]).
 
-OnMeasurement: raw_d = -(pv[k] - pv[k-1])/dt -- no setpoint terms, so no derivative kick.
+OnMeasurement: raw_d = -(pv[k] - pv[k-1])/dt, with no setpoint term, so no derivative kick.
 
 ## Deadband
 
-Current: f(e) = e - d*sign(e) if |e|>d, else 0. This is C0 but not C1.
+f(e) = e - d*sign(e) if |e|>d, else 0. This is C0 but not C1.
 
-Recommendation: Apply deadband only to P and I. Compute D from raw error or measurement.
-If smoothness needed: f(e) = e - d*tanh(e/d) gives C-infinity approximation.
+Applied to P and I only. D uses the raw error or measurement to avoid impulses.
+If smoothness is ever needed: f(e) = e - d*tanh(e/d) is a C-infinity approximation.
 
 ## Filter and Runtime Gain Changes
 
-Kd should be factored OUT of the derivative filter state. Since the filter is LTI:
-Filter(Kd * x) = Kd * Filter(x). Storing filtered_derivative without Kd allows
-runtime Kd changes without corrupting filter state.
+Kd is factored OUT of the derivative filter state. The filter is LTI, so
+Filter(Kd * x) = Kd * Filter(x). Storing the pre-Kd filtered derivative lets
+Kd change at runtime without corrupting the filter state.
