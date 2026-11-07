@@ -2,7 +2,6 @@
 name = "pidgeon"
 version = "1.0.0"
 edition = "2024"
-rust-version = "1.85"
 description = "PID controller with a filtered derivative, anti-windup and output limits. Pure no_std core plus a thread-safe wrapper."
 authors = ["Dario Alessandro"]
 repository = "https://github.com/security-union/pidgeon"
