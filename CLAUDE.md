@@ -35,8 +35,8 @@ cargo check --package pidgeon --features wasm --target wasm32-unknown-unknown
 cargo bench --package pidgeon --features benchmarks
 
 # Run examples
-cargo run --example temperature_control
-cargo run --example drone_altitude_control
+cargo run --example temperature_control     # short; the best place to learn the API
+cargo run --example drone_altitude_control  # a whole ratatui app, not an API reference
 ```
 
 ## Architecture
