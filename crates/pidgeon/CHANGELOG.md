@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0](https://github.com/security-union/pidgeon/compare/v0.3.1...v1.0.0) - 2026-11-07
+
+### Other
+
+- pidgeon 1.0.0: correctness fixes, Iggy removal, docs rewrite ([#22](https://github.com/security-union/pidgeon/pull/22))
+
 ## [0.3.1](https://github.com/security-union/pidgeon/compare/pidgeon-v0.3.0...pidgeon-v0.3.1) - 2026-03-08
 
 ### Other
