@@ -1,11 +1,8 @@
 use crate::enums::{AntiWindupMode, DerivativeMode};
 use crate::error::PidError;
 
-/// Builder for [`ControllerConfig`]. Collects PID parameters without validation
-/// until [`build()`](ControllerConfigBuilder::build) is called.
-///
-/// Use [`ControllerConfig::builder()`] to obtain an instance with sensible defaults,
-/// then chain `with_*` methods to customize.
+/// Builder for [`ControllerConfig`]. Nothing is validated until
+/// [`build()`](ControllerConfigBuilder::build).
 ///
 /// # Defaults
 ///
@@ -38,35 +35,9 @@ use crate::error::PidError;
 ///
 /// assert_eq!(config.kp(), 2.0);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ControllerConfigBuilder {
-    kp: f64,
-    ki: f64,
-    kd: f64,
-    min_output: f64,
-    max_output: f64,
-    anti_windup_mode: AntiWindupMode,
-    setpoint: f64,
-    deadband: f64,
-    derivative_mode: DerivativeMode,
-    derivative_filter_coeff: f64,
-}
-
-impl Default for ControllerConfigBuilder {
-    fn default() -> Self {
-        ControllerConfigBuilder {
-            kp: 1.0,
-            ki: 0.0,
-            kd: 0.0,
-            min_output: -f64::INFINITY,
-            max_output: f64::INFINITY,
-            anti_windup_mode: AntiWindupMode::Conditional,
-            setpoint: 0.0,
-            deadband: 0.0,
-            derivative_mode: DerivativeMode::OnMeasurement,
-            derivative_filter_coeff: 10.0,
-        }
-    }
+    config: ControllerConfig,
 }
 
 impl ControllerConfigBuilder {
@@ -78,30 +49,30 @@ impl ControllerConfigBuilder {
     /// Proportional gain. Multiplied by the (post-deadband) error each time step.
     /// Default: `1.0`.
     pub fn with_kp(mut self, kp: f64) -> Self {
-        self.kp = kp;
+        self.config.kp = kp;
         self
     }
 
     /// Integral gain. Baked into the integral accumulator as `Ki * error * dt` each step.
     /// Default: `0.0` (no integral action).
     pub fn with_ki(mut self, ki: f64) -> Self {
-        self.ki = ki;
+        self.config.ki = ki;
         self
     }
 
     /// Derivative gain. Multiplied by the filtered derivative signal at output time.
     /// Default: `0.0` (no derivative action).
     pub fn with_kd(mut self, kd: f64) -> Self {
-        self.kd = kd;
+        self.config.kd = kd;
         self
     }
 
-    /// Clamps the controller output to `[min, max]`. Both must be finite and `min < max`.
-    /// Default: no limits (`-inf`, `+inf`), but note that [`build()`](Self::build) requires
-    /// finite values.
+    /// Clamps the controller output to `[min, max]`. Requires `min < max`; neither may be
+    /// NaN. Infinite values are allowed and mean "unbounded on that side".
+    /// Default: no limits (`-inf`, `+inf`).
     pub fn with_output_limits(mut self, min: f64, max: f64) -> Self {
-        self.min_output = min;
-        self.max_output = max;
+        self.config.min_output = min;
+        self.config.max_output = max;
         self
     }
 
@@ -109,47 +80,50 @@ impl ControllerConfigBuilder {
     /// `false` selects [`AntiWindupMode::None`]. For back-calculation, use
     /// [`with_anti_windup_mode`](Self::with_anti_windup_mode) instead.
     pub fn with_anti_windup(mut self, enable: bool) -> Self {
-        self.anti_windup_mode = if enable {
-            AntiWindupMode::Conditional
-        } else {
-            AntiWindupMode::None
-        };
+        self.config.anti_windup_mode = AntiWindupMode::from_enabled(enable);
         self
     }
 
     /// Sets the anti-windup strategy directly. Default: [`AntiWindupMode::Conditional`].
     pub fn with_anti_windup_mode(mut self, mode: AntiWindupMode) -> Self {
-        self.anti_windup_mode = mode;
+        self.config.anti_windup_mode = mode;
         self
     }
 
     /// The desired process value the controller drives toward. Default: `0.0`.
     pub fn with_setpoint(mut self, setpoint: f64) -> Self {
-        self.setpoint = setpoint;
+        self.config.setpoint = setpoint;
         self
     }
 
     /// Error values within `+/- deadband` are treated as zero for the proportional
-    /// and integral terms (the derivative term still sees the full signal).
-    /// The value is forced non-negative via `abs()`. Default: `0.0` (no deadband).
+    /// and integral terms (the derivative term still sees the full signal, in both
+    /// [`DerivativeMode`]s). Outside the band the error is shrunk by `deadband`, so
+    /// the P and I terms stay continuous at the band edge.
+    /// A negative value is taken as its absolute value. Must be finite.
+    /// Default: `0.0` (no deadband).
     pub fn with_deadband(mut self, deadband: f64) -> Self {
-        self.deadband = deadband.abs();
+        self.config.deadband = deadband.abs();
         self
     }
 
     /// Selects whether the derivative acts on error or measurement.
     /// Default: [`DerivativeMode::OnMeasurement`].
     pub fn with_derivative_mode(mut self, mode: DerivativeMode) -> Self {
-        self.derivative_mode = mode;
+        self.config.derivative_mode = mode;
         self
     }
 
-    /// IIR low-pass filter coefficient (N) for the derivative term.
-    /// The filter cutoff is `N / (2 * pi)` relative to the sample rate.
+    /// Low-pass filter coefficient `N` for the derivative term, in rad/s.
+    ///
+    /// The derivative is filtered as `N / (s + N)`, i.e. a first-order low-pass
+    /// with time constant `1 / N` seconds and corner frequency `N / (2 * pi)` Hz.
+    /// The corner is independent of the sample rate; it is discretized with
+    /// backward Euler, `alpha = N*dt / (1 + N*dt)`.
     /// Higher values pass more high-frequency content. Must be finite and positive.
     /// Default: `10.0`.
     pub fn with_derivative_filter_coeff(mut self, n: f64) -> Self {
-        self.derivative_filter_coeff = n;
+        self.config.derivative_filter_coeff = n;
         self
     }
 
@@ -159,11 +133,65 @@ impl ControllerConfigBuilder {
     ///
     /// Returns [`PidError::InvalidParameter`] if:
     /// - Any gain (`kp`, `ki`, `kd`) is non-finite.
-    /// - `setpoint` or `deadband` is non-finite (or deadband is negative).
-    /// - Output limits are non-finite or `min >= max`.
+    /// - `setpoint` is non-finite.
+    /// - `deadband` is non-finite (a negative value was already made positive).
+    /// - Either output limit is NaN, or `min >= max`.
     /// - `derivative_filter_coeff` is non-finite or non-positive.
     /// - [`AntiWindupMode::BackCalculation`] has a non-finite or non-positive `tracking_time`.
     pub fn build(self) -> Result<ControllerConfig, PidError> {
+        self.config.validate()?;
+        Ok(self.config)
+    }
+}
+
+impl From<ControllerConfig> for ControllerConfigBuilder {
+    fn from(config: ControllerConfig) -> Self {
+        ControllerConfigBuilder { config }
+    }
+}
+
+/// Validated, immutable PID controller configuration, made by
+/// [`ControllerConfigBuilder::build()`].
+///
+/// To change a few fields of an existing config, go back through the builder so
+/// the result is validated again:
+///
+/// ```
+/// use pidgeon::ControllerConfig;
+///
+/// let config = ControllerConfig::builder().with_kp(1.0).build().unwrap();
+/// let faster = config.to_builder().with_kp(4.0).build().unwrap();
+/// assert_eq!(faster.kp(), 4.0);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ControllerConfig {
+    pub(crate) kp: f64,
+    pub(crate) ki: f64,
+    pub(crate) kd: f64,
+    pub(crate) min_output: f64,
+    pub(crate) max_output: f64,
+    pub(crate) anti_windup_mode: AntiWindupMode,
+    pub(crate) setpoint: f64,
+    pub(crate) deadband: f64,
+    pub(crate) derivative_mode: DerivativeMode,
+    pub(crate) derivative_filter_coeff: f64,
+}
+
+impl ControllerConfig {
+    /// Starts a [`ControllerConfigBuilder`] with the defaults.
+    pub fn builder() -> ControllerConfigBuilder {
+        ControllerConfigBuilder::new()
+    }
+
+    /// Returns a builder pre-filled with this config's values.
+    pub fn to_builder(&self) -> ControllerConfigBuilder {
+        ControllerConfigBuilder::from(*self)
+    }
+
+    /// Checks every invariant documented on [`ControllerConfigBuilder::build`].
+    /// Runtime setters on the stateful controllers go through this too, so a
+    /// `ControllerConfig` held by a controller is always valid.
+    pub(crate) fn validate(&self) -> Result<(), PidError> {
         if !self.kp.is_finite() {
             return Err(PidError::InvalidParameter("kp must be a finite number"));
         }
@@ -183,11 +211,10 @@ impl ControllerConfigBuilder {
                 "deadband must be a finite non-negative number",
             ));
         }
-        if !self.min_output.is_finite() || !self.max_output.is_finite() {
-            return Err(PidError::InvalidParameter(
-                "output limits must be finite numbers",
-            ));
+        if self.min_output.is_nan() || self.max_output.is_nan() {
+            return Err(PidError::InvalidParameter("output limits must not be NaN"));
         }
+        // Also guarantees `f64::clamp(min, max)` in pid_compute cannot panic.
         if self.min_output >= self.max_output {
             return Err(PidError::InvalidParameter(
                 "min_output must be less than max_output",
@@ -198,52 +225,16 @@ impl ControllerConfigBuilder {
                 "derivative_filter_coeff must be a finite positive number",
             ));
         }
-        if let AntiWindupMode::BackCalculation { tracking_time } = self.anti_windup_mode {
-            if !tracking_time.is_finite() || tracking_time <= 0.0 {
-                return Err(PidError::InvalidParameter(
-                    "back-calculation tracking_time must be a finite positive number",
-                ));
-            }
+        if matches!(
+            self.anti_windup_mode,
+            AntiWindupMode::BackCalculation { tracking_time }
+                if !tracking_time.is_finite() || tracking_time <= 0.0
+        ) {
+            return Err(PidError::InvalidParameter(
+                "back-calculation tracking_time must be a finite positive number",
+            ));
         }
-
-        Ok(ControllerConfig {
-            kp: self.kp,
-            ki: self.ki,
-            kd: self.kd,
-            min_output: self.min_output,
-            max_output: self.max_output,
-            anti_windup_mode: self.anti_windup_mode,
-            setpoint: self.setpoint,
-            deadband: self.deadband,
-            derivative_mode: self.derivative_mode,
-            derivative_filter_coeff: self.derivative_filter_coeff,
-        })
-    }
-}
-
-/// Validated, immutable PID controller configuration.
-///
-/// Obtain via [`ControllerConfig::builder()`] followed by
-/// [`ControllerConfigBuilder::build()`]. All fields are guaranteed valid at
-/// construction time; accessor methods provide read-only access.
-#[derive(Debug, Clone)]
-pub struct ControllerConfig {
-    pub(crate) kp: f64,
-    pub(crate) ki: f64,
-    pub(crate) kd: f64,
-    pub(crate) min_output: f64,
-    pub(crate) max_output: f64,
-    pub(crate) anti_windup_mode: AntiWindupMode,
-    pub(crate) setpoint: f64,
-    pub(crate) deadband: f64,
-    pub(crate) derivative_mode: DerivativeMode,
-    pub(crate) derivative_filter_coeff: f64,
-}
-
-impl ControllerConfig {
-    /// Creates a new [`ControllerConfigBuilder`]. This is the entry point for configuration.
-    pub fn builder() -> ControllerConfigBuilder {
-        ControllerConfigBuilder::new()
+        Ok(())
     }
 
     /// Proportional gain.
@@ -282,8 +273,26 @@ impl ControllerConfig {
     pub fn derivative_mode(&self) -> DerivativeMode {
         self.derivative_mode
     }
-    /// IIR low-pass filter coefficient (N) for the derivative term.
+    /// Derivative low-pass filter coefficient `N` in rad/s.
     pub fn derivative_filter_coeff(&self) -> f64 {
         self.derivative_filter_coeff
+    }
+}
+
+impl Default for ControllerConfig {
+    /// The builder defaults: `kp = 1`, everything else off, no output limits.
+    fn default() -> Self {
+        ControllerConfig {
+            kp: 1.0,
+            ki: 0.0,
+            kd: 0.0,
+            min_output: f64::NEG_INFINITY,
+            max_output: f64::INFINITY,
+            anti_windup_mode: AntiWindupMode::Conditional,
+            setpoint: 0.0,
+            deadband: 0.0,
+            derivative_mode: DerivativeMode::OnMeasurement,
+            derivative_filter_coeff: 10.0,
+        }
     }
 }

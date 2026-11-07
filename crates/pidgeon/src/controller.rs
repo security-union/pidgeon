@@ -1,133 +1,114 @@
-use crate::compute::pid_compute;
+use crate::compute::{PidTerms, pid_step};
 use crate::config::ControllerConfig;
 use crate::enums::AntiWindupMode;
 use crate::error::PidError;
 use crate::state::PidState;
 
-#[cfg(all(feature = "std", feature = "wasm"))]
-use web_time::Instant;
-
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-use std::time::Instant;
-
-#[cfg(all(feature = "std", feature = "wasm"))]
-use web_time::Duration;
-
-#[cfg(all(feature = "std", not(feature = "wasm")))]
-use std::time::Duration;
-
-#[cfg(feature = "debugging")]
-use crate::debug::ControllerDebugger;
-
-#[cfg(feature = "debugging")]
-use crate::debug::DebugConfig;
-
-/// Runtime performance metrics for a [`PidController`].
+/// Step-response metrics for a [`PidController`].
 ///
-/// Tracks how well the controller is performing relative to the setpoint.
-/// Obtain via [`PidController::get_statistics`].
-#[derive(Debug, Clone)]
+/// All times are in seconds of *controller time*: the sum of the `dt` values passed
+/// to [`PidController::compute`], not wall-clock time. That keeps the numbers
+/// right for simulations that run faster than real time and for replayed logs.
+///
+/// Metrics describe the response since the last [`PidController::reset`] or
+/// setpoint change. The first sample after that defines the step: the sign of its
+/// error is the direction of travel.
+///
+/// Read them with [`PidController::get_statistics`].
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ControllerStatistics {
-    /// Mean absolute error across all time steps since the last reset.
+    /// Mean absolute error across all samples.
     pub average_error: f64,
-    /// Largest absolute error observed since the last reset.
+    /// Largest distance the process value went *past* the setpoint, in process
+    /// units, in the direction of travel. `0.0` if it never crossed, or if the
+    /// first sample had zero error (no step to overshoot).
     pub max_overshoot: f64,
-    /// Seconds from start (or last reset) until the error settled within the
-    /// settled threshold and remained there. If not yet settled, reports the
-    /// elapsed time so far.
+    /// Time at which `|error|` last entered the settled band
+    /// (see [`PidController::set_settled_threshold`]) and has stayed inside it
+    /// since. While the error is outside the band, this is the elapsed time so far.
     pub settling_time: f64,
-    /// Seconds from start (or last reset) until the error first entered the
-    /// settled threshold. [`f64::NAN`] if the setpoint has never been reached.
+    /// Time until `|error|` first entered the settled band. [`f64::NAN`] if it
+    /// never has.
     pub rise_time: f64,
 }
 
-pub(crate) struct StatisticsTracker {
-    pub(crate) start_time: Instant,
-    pub(crate) error_sum: f64,
-    pub(crate) error_count: u64,
-    pub(crate) max_error: f64,
-    pub(crate) reached_setpoint: bool,
-    pub(crate) rise_time: Option<Duration>,
-    pub(crate) settle_time: Option<Duration>,
-    pub(crate) settled_threshold: f64,
+#[derive(Debug, Clone)]
+struct StatisticsTracker {
+    elapsed: f64,
+    abs_error_sum: f64,
+    sample_count: u64,
+    direction: Option<f64>,
+    max_overshoot: f64,
+    rise_time: Option<f64>,
+    settle_time: Option<f64>,
+    settled_threshold: f64,
 }
 
+const DEFAULT_SETTLED_THRESHOLD: f64 = 0.05;
+
 impl StatisticsTracker {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         StatisticsTracker {
-            start_time: Instant::now(),
-            error_sum: 0.0,
-            error_count: 0,
-            max_error: 0.0,
-            reached_setpoint: false,
+            elapsed: 0.0,
+            abs_error_sum: 0.0,
+            sample_count: 0,
+            direction: None,
+            max_overshoot: 0.0,
             rise_time: None,
             settle_time: None,
-            settled_threshold: 0.05,
+            settled_threshold: DEFAULT_SETTLED_THRESHOLD,
         }
     }
 
-    pub(crate) fn update(&mut self, error: f64) {
-        self.error_sum += error.abs();
-        self.error_count += 1;
+    fn update(&mut self, error: f64, dt: f64) {
+        self.elapsed += dt;
+        let now = self.elapsed;
+        let abs_error = error.abs();
 
-        if error.abs() > self.max_error {
-            self.max_error = error.abs();
-        }
+        self.abs_error_sum += abs_error;
+        self.sample_count += 1;
 
-        if !self.reached_setpoint && error.abs() <= self.settled_threshold {
-            self.reached_setpoint = true;
-            self.rise_time = Some(Instant::now() - self.start_time);
-        }
+        // +1 for a step up, -1 for a step down, 0 if we started on the setpoint.
+        let direction =
+            *self
+                .direction
+                .get_or_insert(if error == 0.0 { 0.0 } else { error.signum() });
+        // Past the setpoint means the error has the opposite sign of the step.
+        self.max_overshoot = self.max_overshoot.max(-error * direction);
 
-        if self.reached_setpoint
-            && error.abs() <= self.settled_threshold
-            && self.settle_time.is_none()
-        {
-            self.settle_time = Some(Instant::now() - self.start_time);
-        } else if error.abs() > self.settled_threshold {
+        if abs_error <= self.settled_threshold {
+            self.rise_time.get_or_insert(now);
+            self.settle_time.get_or_insert(now);
+        } else {
             self.settle_time = None;
         }
     }
 
-    pub(crate) fn get_statistics(&self) -> ControllerStatistics {
-        let avg_error = if self.error_count > 0 {
-            self.error_sum / self.error_count as f64
+    fn statistics(&self) -> ControllerStatistics {
+        let average_error = if self.sample_count > 0 {
+            self.abs_error_sum / self.sample_count as f64
         } else {
             0.0
         };
-
-        let settling_time = match self.settle_time {
-            Some(time) => time.as_secs_f64(),
-            None => (Instant::now() - self.start_time).as_secs_f64(),
-        };
-
-        let rise_time = match self.rise_time {
-            Some(time) => time.as_secs_f64(),
-            None => f64::NAN,
-        };
-
         ControllerStatistics {
-            average_error: avg_error,
-            max_overshoot: self.max_error,
-            settling_time,
-            rise_time,
+            average_error,
+            max_overshoot: self.max_overshoot,
+            settling_time: self.settle_time.unwrap_or(self.elapsed),
+            rise_time: self.rise_time.unwrap_or(f64::NAN),
         }
     }
 
-    pub(crate) fn reset(&mut self) {
-        self.start_time = Instant::now();
-        self.error_sum = 0.0;
-        self.error_count = 0;
-        self.max_error = 0.0;
-        self.reached_setpoint = false;
-        self.rise_time = None;
-        self.settle_time = None;
+    fn reset(&mut self) {
+        *self = StatisticsTracker {
+            settled_threshold: self.settled_threshold,
+            ..StatisticsTracker::new()
+        };
     }
 }
 
 /// Stateful PID controller with built-in performance statistics.
 ///
-/// Wraps [`pid_compute`] with automatic time tracking and statistics. For
+/// Wraps [`pid_compute`](crate::pid_compute) and keeps the state for you. For
 /// multi-threaded use, see [`ThreadSafePidController`](crate::ThreadSafePidController).
 ///
 /// # Examples
@@ -145,16 +126,14 @@ impl StatisticsTracker {
 ///
 /// let mut controller = PidController::new(config);
 ///
-/// // Simulate a control loop
 /// let output = controller.compute(45.0, 0.01).unwrap();
 /// assert!(output > 0.0); // driving toward setpoint=50
 /// ```
 pub struct PidController {
     pub(crate) config: ControllerConfig,
     pub(crate) state: PidState,
-    pub(crate) stats: StatisticsTracker,
-    #[cfg(feature = "debugging")]
-    pub(crate) debugger: Option<ControllerDebugger>,
+    stats: StatisticsTracker,
+    pub(crate) last_terms: PidTerms,
 }
 
 impl PidController {
@@ -164,55 +143,33 @@ impl PidController {
             config,
             state: PidState::default(),
             stats: StatisticsTracker::new(),
-            #[cfg(feature = "debugging")]
-            debugger: None,
+            last_terms: PidTerms::default(),
         }
     }
 
     /// Runs one PID iteration and returns the clamped control output.
     ///
-    /// Also updates internal statistics (average error, overshoot, etc.).
+    /// Also updates the step-response statistics. A call that returns an error
+    /// changes nothing: neither the state nor the statistics.
     ///
     /// # Errors
     ///
-    /// Returns [`PidError::InvalidParameter`] if `process_value` is non-finite
-    /// or `dt` is non-finite / non-positive.
+    /// Returns [`PidError::InvalidParameter`] if `process_value` is non-finite,
+    /// `dt` is non-finite / non-positive, or the computation overflows.
     pub fn compute(&mut self, process_value: f64, dt: f64) -> Result<f64, PidError> {
-        let error = self.config.setpoint - process_value;
-        self.stats.update(error);
+        let (output, new_state, terms) = pid_step(&self.config, &self.state, process_value, dt)?;
 
-        let (output, new_state) = pid_compute(&self.config, &self.state, process_value, dt)?;
-
-        // Debugging
-        #[cfg(feature = "debugging")]
-        if let Some(ref mut debugger) = self.debugger {
-            let working_error = if error.abs() <= self.config.deadband {
-                0.0
-            } else {
-                error - self.config.deadband * error.signum()
-            };
-            let p_term = self.config.kp * working_error;
-            let d_term = self.config.kd * new_state.prev_filtered_derivative;
-            debugger.log_pid_state(
-                self.config.setpoint,
-                process_value,
-                working_error,
-                p_term,
-                new_state.integral_contribution,
-                d_term,
-                output,
-                dt,
-            );
-        }
-
+        self.stats.update(self.config.setpoint - process_value, dt);
+        self.last_terms = terms;
         self.state = new_state;
         Ok(output)
     }
 
     /// Resets controller state and statistics to initial values. The
-    /// configuration is preserved.
+    /// configuration (and the settled threshold) is preserved.
     pub fn reset(&mut self) {
         self.state = PidState::default();
+        self.last_terms = PidTerms::default();
         self.stats.reset();
     }
 
@@ -221,9 +178,36 @@ impl PidController {
         &self.state
     }
 
+    /// The P, I and D contributions behind the most recent output. All zero
+    /// before the first successful [`compute`](Self::compute) and after
+    /// [`reset`](Self::reset).
+    pub fn last_terms(&self) -> PidTerms {
+        self.last_terms
+    }
+
     /// Returns a reference to the current [`ControllerConfig`].
     pub fn config(&self) -> &ControllerConfig {
         &self.config
+    }
+
+    /// Replaces the entire configuration. Controller state is kept, so the
+    /// switch is bumpless (the integral already has `Ki` baked in). Statistics
+    /// restart if the setpoint changed.
+    pub fn update_config(&mut self, config: ControllerConfig) {
+        if config.setpoint != self.config.setpoint {
+            self.stats.reset();
+        }
+        self.config = config;
+    }
+
+    /// Applies `change` to a copy of the config and swaps it in only if the
+    /// result validates.
+    fn try_update(&mut self, change: impl FnOnce(&mut ControllerConfig)) -> Result<(), PidError> {
+        let mut next = self.config;
+        change(&mut next);
+        next.validate()?;
+        self.update_config(next);
+        Ok(())
     }
 
     /// Updates the proportional gain at runtime.
@@ -232,24 +216,19 @@ impl PidController {
     ///
     /// Returns [`PidError::InvalidParameter`] if `kp` is non-finite.
     pub fn set_kp(&mut self, kp: f64) -> Result<(), PidError> {
-        if !kp.is_finite() {
-            return Err(PidError::InvalidParameter("kp must be a finite number"));
-        }
-        self.config.kp = kp;
-        Ok(())
+        self.try_update(|config| config.kp = kp)
     }
 
     /// Updates the integral gain at runtime.
+    ///
+    /// The integral state stores `Ki` already multiplied in, so this is bumpless.
+    /// Setting `ki` to zero freezes the current integral contribution in place.
     ///
     /// # Errors
     ///
     /// Returns [`PidError::InvalidParameter`] if `ki` is non-finite.
     pub fn set_ki(&mut self, ki: f64) -> Result<(), PidError> {
-        if !ki.is_finite() {
-            return Err(PidError::InvalidParameter("ki must be a finite number"));
-        }
-        self.config.ki = ki;
-        Ok(())
+        self.try_update(|config| config.ki = ki)
     }
 
     /// Updates the derivative gain at runtime.
@@ -258,42 +237,55 @@ impl PidController {
     ///
     /// Returns [`PidError::InvalidParameter`] if `kd` is non-finite.
     pub fn set_kd(&mut self, kd: f64) -> Result<(), PidError> {
-        if !kd.is_finite() {
-            return Err(PidError::InvalidParameter("kd must be a finite number"));
-        }
-        self.config.kd = kd;
-        Ok(())
+        self.try_update(|config| config.kd = kd)
     }
 
-    /// Updates the output clamp range at runtime.
+    /// Updates the output clamp range at runtime. Infinite values mean
+    /// "unbounded on that side".
+    ///
+    /// # Panics
+    ///
+    /// Panics if either limit is NaN or `min >= max`. The bad limits are never
+    /// stored. [`ThreadSafePidController::set_output_limits`](crate::ThreadSafePidController::set_output_limits)
+    /// returns an error instead.
     pub fn set_output_limits(&mut self, min: f64, max: f64) {
-        self.config.min_output = min;
-        self.config.max_output = max;
+        if let Err(error) = self.try_set_output_limits(min, max) {
+            panic!("PidController::set_output_limits({min}, {max}): {error}");
+        }
+    }
+
+    /// Fallible form of [`set_output_limits`](Self::set_output_limits).
+    pub(crate) fn try_set_output_limits(&mut self, min: f64, max: f64) -> Result<(), PidError> {
+        self.try_update(|config| {
+            config.min_output = min;
+            config.max_output = max;
+        })
     }
 
     /// Convenience toggle for anti-windup. `true` selects
     /// [`AntiWindupMode::Conditional`], `false` selects [`AntiWindupMode::None`].
     pub fn set_anti_windup(&mut self, enable: bool) {
-        self.config.anti_windup_mode = if enable {
-            AntiWindupMode::Conditional
-        } else {
-            AntiWindupMode::None
-        };
+        self.config.anti_windup_mode = AntiWindupMode::from_enabled(enable);
     }
 
-    /// Updates the setpoint at runtime.
+    /// Sets the anti-windup strategy at runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PidError::InvalidParameter`] if a
+    /// [`AntiWindupMode::BackCalculation`] `tracking_time` is non-finite or non-positive.
+    pub fn set_anti_windup_mode(&mut self, mode: AntiWindupMode) -> Result<(), PidError> {
+        self.try_update(|config| config.anti_windup_mode = mode)
+    }
+
+    /// Updates the setpoint at runtime. Statistics restart when the value
+    /// changes, since they describe the response to a single step.
     ///
     /// # Errors
     ///
     /// Returns [`PidError::InvalidParameter`] if `setpoint` is non-finite.
     pub fn set_setpoint(&mut self, setpoint: f64) -> Result<(), PidError> {
-        if !setpoint.is_finite() {
-            return Err(PidError::InvalidParameter(
-                "setpoint must be a finite number",
-            ));
-        }
-        self.config.setpoint = setpoint;
-        Ok(())
+        self.try_update(|config| config.setpoint = setpoint)
     }
 
     /// Returns the current setpoint.
@@ -301,38 +293,34 @@ impl PidController {
         self.config.setpoint
     }
 
-    /// Returns a snapshot of the controller's performance statistics.
+    /// Returns a snapshot of the controller's step-response statistics.
     pub fn get_statistics(&self) -> ControllerStatistics {
-        self.stats.get_statistics()
+        self.stats.statistics()
     }
 
-    /// Sets the error threshold used to determine rise time and settling time
-    /// in [`ControllerStatistics`]. Default: `0.05`.
+    /// Sets the absolute error band, in process units, used for
+    /// [`ControllerStatistics::rise_time`] and
+    /// [`ControllerStatistics::settling_time`]. Default: `0.05`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `threshold` is NaN, infinite or negative. The bad value is never
+    /// stored.
     pub fn set_settled_threshold(&mut self, threshold: f64) {
+        assert!(
+            threshold.is_finite() && threshold >= 0.0,
+            "PidController::set_settled_threshold({threshold}): threshold must be a finite non-negative number"
+        );
         self.stats.settled_threshold = threshold;
     }
 
-    /// Updates the deadband half-width at runtime. The value is forced
-    /// non-negative via `abs()`.
+    /// Updates the deadband half-width at runtime. A negative value is taken as
+    /// its absolute value, as in 0.3.
     ///
     /// # Errors
     ///
     /// Returns [`PidError::InvalidParameter`] if `deadband` is non-finite.
     pub fn set_deadband(&mut self, deadband: f64) -> Result<(), PidError> {
-        if !deadband.is_finite() {
-            return Err(PidError::InvalidParameter(
-                "deadband must be a finite number",
-            ));
-        }
-        self.config.deadband = deadband.abs();
-        Ok(())
-    }
-
-    /// Attaches a debugger that streams PID telemetry via Iggy.rs.
-    /// Only available with the `debugging` feature.
-    #[cfg(feature = "debugging")]
-    pub fn with_debugging(mut self, debug_config: DebugConfig) -> Self {
-        self.debugger = Some(ControllerDebugger::new(debug_config));
-        self
+        self.try_update(|config| config.deadband = deadband.abs())
     }
 }

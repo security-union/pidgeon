@@ -1,8 +1,7 @@
 /// Selects which signal the derivative term operates on.
 ///
-/// The derivative term can amplify noise and cause "derivative kick" -- a sudden spike in
-/// output when the setpoint changes abruptly. Choosing the right mode depends on whether
-/// your application changes setpoints frequently.
+/// Differentiating the error makes the output spike whenever the setpoint steps
+/// ("derivative kick"). Differentiating the measurement avoids that.
 ///
 /// # Examples
 ///
@@ -18,26 +17,24 @@
 ///     .build()
 ///     .unwrap();
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DerivativeMode {
     /// Derivative of the error signal: `d(error)/dt`.
     ///
-    /// Responds to both setpoint changes and measurement changes. This can cause
-    /// "derivative kick" -- a large output spike when the setpoint steps suddenly.
-    /// Prefer this mode only when the setpoint changes smoothly.
+    /// Responds to setpoint changes as well as measurement changes, so a setpoint
+    /// step kicks the output. Use it only when the setpoint moves smoothly.
     OnError,
     /// Derivative of the measurement signal: `-d(measurement)/dt` (default).
     ///
-    /// Ignores setpoint changes entirely, eliminating derivative kick. This is the
-    /// safer default for most control loops.
+    /// Ignores setpoint changes, so there is no derivative kick.
+    #[default]
     OnMeasurement,
 }
 
 /// Anti-windup strategy for the integral term.
 ///
-/// When the controller output saturates (hits its min/max limits), the integral term
-/// can continue accumulating error ("winding up"), causing sluggish recovery once the
-/// output leaves saturation. Anti-windup strategies prevent this.
+/// While the output is clamped, the integral can keep growing ("winding up") and
+/// then take a long time to unwind once the error reverses.
 ///
 /// # Examples
 ///
@@ -53,22 +50,41 @@ pub enum DerivativeMode {
 ///     .build()
 ///     .unwrap();
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum AntiWindupMode {
-    /// No anti-windup protection. The integral term accumulates without bound
-    /// when the output saturates.
+    /// The integral accumulates without bound while the output is clamped.
     None,
-    /// Conditional integration (default). Reverts the integral accumulation for any
-    /// time step where the output would have saturated, preventing windup entirely.
-    Conditional,
-    /// Back-calculation. Feeds the saturation error back into the integrator:
-    /// `integral += (output_clamped - output_unclamped) * dt / tracking_time`.
+    /// Conditional integration, also called clamping (default).
     ///
-    /// This is a smoother correction than [`Conditional`](AntiWindupMode::Conditional)
-    /// and allows partial accumulation near the limits.
+    /// While the output is saturated, integration is skipped for any step whose
+    /// error would push the output *further* into the limit. Integration that
+    /// pulls the output back out of saturation is always allowed, so an integral
+    /// that ended up beyond the limits (for example after the limits were
+    /// tightened at runtime) unwinds normally.
+    #[default]
+    Conditional,
+    /// Back-calculation. Feeds the saturation error back into the integrator with
+    /// time constant `tracking_time` (Tt):
+    /// `integral += (output_clamped - output_unclamped) * dt / (tracking_time + dt)`.
+    ///
+    /// This is the backward-Euler (implicit) discretization of
+    /// `dI/dt = (u_clamped - u_unclamped) / Tt`, which stays stable for any `dt`.
+    /// The explicit form `dt / Tt` overshoots once `dt > Tt` and diverges once
+    /// `dt > 2 * Tt`.
     BackCalculation {
         /// Tracking time constant in seconds. Smaller values produce faster
         /// anti-windup correction. Must be finite and positive.
         tracking_time: f64,
     },
+}
+
+impl AntiWindupMode {
+    /// The `bool` toggle behind `with_anti_windup` / `set_anti_windup`.
+    pub(crate) fn from_enabled(enable: bool) -> Self {
+        if enable {
+            AntiWindupMode::Conditional
+        } else {
+            AntiWindupMode::None
+        }
+    }
 }
